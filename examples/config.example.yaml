@@ -1,0 +1,63 @@
+# Example configuration for oci-mirror-proxy.
+# Copy to the default location with: oci-mirror-proxy init
+# or pass a path with --config. This file is validated by the test suite.
+
+version: 1
+
+# Address the registry API listens on. Keep it on loopback unless you know why not:
+# the API has no authentication of its own.
+listen: 127.0.0.1:24817
+
+# Optional. The address dockerd should use to reach the proxy. Needed when
+# listen is a wildcard address, because dockerd cannot connect to 0.0.0.0.
+# advertise: 192.168.1.10:24817
+
+admin:
+  # Optional. Defaults to $XDG_RUNTIME_DIR/oci-mirror-proxy/admin.sock
+  # (or the user cache directory when XDG_RUNTIME_DIR is unset).
+  # socket: /run/user/1000/oci-mirror-proxy/admin.sock
+
+registries:
+  # Served at /v2/ (the default alias that dockerd uses for Docker Hub).
+  docker.io:
+    # Official endpoint. dockerd falls back to it when the proxy cannot serve a request.
+    origin: https://registry-1.docker.io
+
+    # Hedged requests. Off by default, because racing sends extra requests to
+    # the upstreams and Docker Hub enforces pull rate limits.
+    race:
+      enabled: false
+      delay: 500ms        # start another upstream if nothing answered within this time
+      max_parallel: 2     # never more than this many attempts in flight
+
+    # Per-upstream circuit breaker.
+    breaker:
+      threshold: 3        # consecutive failures before an upstream is skipped
+      cooldown: 30s       # how long a skipped upstream is left alone
+
+    upstreams:
+      # Tried first.
+      - id: mirror-a
+        url: https://mirror-a.example.com
+        timeouts:
+          first_byte: 5s  # wait this long for response headers before moving on
+          overall: 60s    # bound for metadata requests (manifests, tags, referrers)
+        auth:
+          type: none
+
+      # Tried second. Uses HTTP Basic credentials read from an environment variable.
+      - id: mirror-b
+        url: https://mirror-b.example.com/hub   # a base path is allowed
+        auth:
+          type: basic
+          username: alice
+          password: env:MIRROR_B_PASSWORD        # never write the secret itself here
+        tls:
+          ca_file: /etc/ssl/certs/mirror-b-ca.pem # extra CA, added to the system roots
+
+      # Anonymous token auth, for registries that answer with a Bearer challenge.
+      - id: token-mirror
+        url: https://token-mirror.example.com
+        disabled: true        # present but out of rotation
+        auth:
+          type: token

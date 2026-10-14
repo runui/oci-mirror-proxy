@@ -1,0 +1,14 @@
+# Build output
+/dist/
+/oci-mirror-proxy
+
+# Test and coverage artefacts
+*.test
+*.out
+coverage.html
+
+# Editor and OS files
+.DS_Store
+*.swp
+
+# Note: testdata/fuzz corpora are regression inputs and must be committed.
