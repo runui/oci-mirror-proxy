@@ -86,6 +86,7 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 		authType := fs.String("auth", config.AuthNone, "none, basic or token")
 		username := fs.String("username", "", "username for basic or token auth")
 		passwordRef := fs.String("password-ref", "", "secret reference, e.g. env:MIRROR_PASSWORD or file:/run/secrets/pw")
+		connect := fs.String("connect", "", "TCP + TLS connection timeout, e.g. 10s (default 10s)")
 		firstByte := fs.String("first-byte", "", "response header timeout, e.g. 5s (default 5s)")
 		overall := fs.String("overall", "", "timeout for metadata requests, e.g. 60s (default 60s)")
 		caFile := fs.String("ca-file", "", "extra CA certificate file for this upstream")
@@ -105,6 +106,7 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 			ID:        *id,
 			URL:       *url,
 			Disabled:  *disabled,
+			Connect:   *connect,
 			FirstByte: *firstByte,
 			Overall:   *overall,
 			Auth: admin.AuthSpec{

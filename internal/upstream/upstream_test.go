@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -311,5 +312,38 @@ func TestPoolReconcileFailureLeavesPoolUnchanged(t *testing.T) {
 	}
 	if status := p.Status(); len(status) != 1 || status[0].ID != "good" {
 		t.Fatalf("failed reconcile changed the pool: %+v", status)
+	}
+}
+
+// TestConnectTimeoutBoundsTLSHandshake reproduces a path where TCP connects but the
+// peer never completes the TLS handshake, as seen through a slow intermediary.
+func TestConnectTimeoutBoundsTLSHandshake(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close() // hold the connection open and say nothing
+		}
+	}()
+
+	e := newTestEndpoint(t, config.Upstream{
+		ID:       "stalled-tls",
+		URL:      "https://" + ln.Addr().String(),
+		Timeouts: config.Timeouts{Connect: 200 * time.Millisecond, FirstByte: 10 * time.Second, Overall: 10 * time.Second},
+	}, 5)
+	start := time.Now()
+	_, err = getManifest(t, e, "library/nginx")
+	if err == nil {
+		t.Fatal("a stalled TLS handshake must fail")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("connect timeout did not bound the handshake: took %v", elapsed)
 	}
 }

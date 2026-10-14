@@ -47,6 +47,7 @@ so racing is off by default and should be enabled deliberately.
 | `id` | required | Unique within the registry. 1 to 63 letters, digits, `-` or `_`. |
 | `url` | required | Base URL of a Registry v2 endpoint. `http` or `https`, with no query, fragment or credentials. A base path such as `/hub` is allowed. |
 | `disabled` | `false` | Keep the upstream in the file but out of rotation. |
+| `timeouts.connect` | `10s` | Maximum time to establish the connection: the TCP dial and the TLS handshake. Raise it for slow or proxied paths. |
 | `timeouts.first_byte` | `5s` | Maximum wait for response headers. This is the cost of meeting a silent upstream. |
 | `timeouts.overall` | `60s` | Bound for metadata requests: manifests, tag lists and referrers. Blob transfers are not bounded by it. |
 | `auth.type` | `none` | `none`, `basic` or `token`. See below. |

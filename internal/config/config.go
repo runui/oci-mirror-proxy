@@ -36,6 +36,7 @@ const (
 	defaultRaceParallel     = 2
 	defaultBreakerThreshold = 3
 	defaultBreakerCooldown  = 30 * time.Second
+	defaultConnect          = 10 * time.Second
 	defaultFirstByte        = 5 * time.Second
 	defaultOverall          = 60 * time.Second
 )
@@ -91,6 +92,8 @@ type Upstream struct {
 
 // Timeouts bounds one upstream attempt.
 type Timeouts struct {
+	// Connect limits establishing the connection: the TCP dial and the TLS handshake.
+	Connect time.Duration `yaml:"connect"`
 	// FirstByte limits the wait for response headers.
 	FirstByte time.Duration `yaml:"first_byte"`
 	// Overall limits a whole metadata request. Blob transfers are not bounded by it.
@@ -153,6 +156,9 @@ func (r *Registry) applyDefaults(alias string) {
 	}
 	for i := range r.Upstreams {
 		u := &r.Upstreams[i]
+		if u.Timeouts.Connect == 0 {
+			u.Timeouts.Connect = defaultConnect
+		}
 		if u.Timeouts.FirstByte == 0 {
 			u.Timeouts.FirstByte = defaultFirstByte
 		}
@@ -261,6 +267,9 @@ func validateUpstream(u Upstream) error {
 	}
 	if err := validateBaseURL(u.URL); err != nil {
 		errs = append(errs, fmt.Errorf("url: %w", err))
+	}
+	if u.Timeouts.Connect <= 0 {
+		errs = append(errs, errors.New("timeouts.connect must be positive"))
 	}
 	if u.Timeouts.FirstByte <= 0 {
 		errs = append(errs, errors.New("timeouts.first_byte must be positive"))

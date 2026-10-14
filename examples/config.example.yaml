@@ -40,6 +40,7 @@ registries:
       - id: mirror-a
         url: https://mirror-a.example.com
         timeouts:
+          connect: 10s    # dial and TLS handshake; raise it for slow or proxied paths
           first_byte: 5s  # wait this long for response headers before moving on
           overall: 60s    # bound for metadata requests (manifests, tags, referrers)
         auth:

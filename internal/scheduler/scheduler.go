@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/runui/oci-mirror-proxy/internal/ociapi"
 )
@@ -61,11 +62,23 @@ type Exhausted struct {
 	Failures []Failure
 }
 
+// Error lists why each attempted candidate failed, so logs explain a 502.
 func (e *Exhausted) Error() string {
 	if len(e.Failures) == 0 {
 		return "no upstream available"
 	}
-	return fmt.Sprintf("all %d upstream attempts failed", len(e.Failures))
+	parts := make([]string, 0, len(e.Failures))
+	for _, f := range e.Failures {
+		reason := "no response"
+		switch {
+		case f.Status != 0:
+			reason = fmt.Sprintf("HTTP %d", f.Status)
+		case f.Err != nil:
+			reason = f.Err.Error()
+		}
+		parts = append(parts, f.Candidate+": "+reason)
+	}
+	return fmt.Sprintf("all %d upstream attempts failed (%s)", len(e.Failures), strings.Join(parts, "; "))
 }
 
 // AllNotFound reports whether every attempted candidate answered 404. The

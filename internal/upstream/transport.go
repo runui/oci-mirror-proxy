@@ -13,14 +13,17 @@ import (
 )
 
 const (
-	dialTimeout         = 10 * time.Second
-	tlsHandshakeTimeout = 10 * time.Second
-	idleConnTimeout     = 90 * time.Second
+	// defaultConnectTimeout applies when a caller leaves the connect timeout unset.
+	defaultConnectTimeout = 10 * time.Second
+	idleConnTimeout       = 90 * time.Second
 )
 
 // newTransport builds the HTTP transport for one upstream. Each upstream gets its
 // own transport, so TLS settings and connection pools never leak between upstreams.
-func newTransport(tlsCfg config.TLS, firstByte time.Duration) (*http.Transport, error) {
+func newTransport(tlsCfg config.TLS, connect, firstByte time.Duration) (*http.Transport, error) {
+	if connect <= 0 {
+		connect = defaultConnectTimeout
+	}
 	tc := &tls.Config{MinVersion: tls.VersionTLS12}
 	if tlsCfg.InsecureSkipVerify {
 		// Opt-in per upstream. The configuration documentation warns about it.
@@ -43,13 +46,17 @@ func newTransport(tlsCfg config.TLS, firstByte time.Duration) (*http.Transport, 
 	}
 	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:           (&net.Dialer{Timeout: connect, KeepAlive: 30 * time.Second}).DialContext,
 		TLSClientConfig:       tc,
-		TLSHandshakeTimeout:   tlsHandshakeTimeout,
+		TLSHandshakeTimeout:   connect,
 		ResponseHeaderTimeout: firstByte,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConnsPerHost:   8,
-		IdleConnTimeout:       idleConnTimeout,
+		// HTTP/2 is deliberately not forced. Layer downloads already run in
+		// parallel over several connections, and some intermediaries (observed:
+		// a local HTTP proxy in front of Docker Hub) make the h2 handshake far
+		// slower than HTTP/1.1, which then trips the TLS handshake timeout.
+		ForceAttemptHTTP2:   false,
+		MaxIdleConnsPerHost: 8,
+		IdleConnTimeout:     idleConnTimeout,
 		// Bytes are forwarded unchanged. Never negotiate or decode gzip, so the
 		// Content-Length and digests seen by the client match the upstream exactly.
 		DisableCompression: true,

@@ -46,6 +46,9 @@ func TestApplyDefaultsFillsUpstreams(t *testing.T) {
 		t.Errorf("origin = %q, want https://ghcr.io", reg.Origin)
 	}
 	u := reg.Upstreams[0]
+	if u.Timeouts.Connect != defaultConnect {
+		t.Errorf("connect timeout = %v, want default %v", u.Timeouts.Connect, defaultConnect)
+	}
 	if u.Timeouts.FirstByte != defaultFirstByte || u.Timeouts.Overall != defaultOverall {
 		t.Errorf("timeouts not defaulted: %+v", u.Timeouts)
 	}

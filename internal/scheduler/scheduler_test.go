@@ -261,3 +261,16 @@ func TestHedgedRespectsMaxParallel(t *testing.T) {
 		t.Fatalf("started %d attempts concurrently, want MaxParallel=2", got)
 	}
 }
+
+func TestExhaustedErrorExplainsEachFailure(t *testing.T) {
+	ex := &Exhausted{Failures: []Failure{
+		{Candidate: "hub", Status: http.StatusBadGateway},
+		{Candidate: "mirror", Err: errors.New("tls handshake timeout")},
+	}}
+	msg := ex.Error()
+	for _, want := range []string{"hub: HTTP 502", "mirror: tls handshake timeout"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q does not explain %q", msg, want)
+		}
+	}
+}

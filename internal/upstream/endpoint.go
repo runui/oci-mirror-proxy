@@ -48,7 +48,7 @@ func NewEndpoint(ctx context.Context, spec config.Upstream, breaker config.Break
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
 	}
-	transport, err := newTransport(spec.TLS, spec.Timeouts.FirstByte)
+	transport, err := newTransport(spec.TLS, spec.Timeouts.Connect, spec.Timeouts.FirstByte)
 	if err != nil {
 		return nil, err
 	}

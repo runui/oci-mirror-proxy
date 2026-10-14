@@ -35,6 +35,7 @@ type UpstreamSpec struct {
 	ID        string   `json:"id"`
 	URL       string   `json:"url"`
 	Disabled  bool     `json:"disabled,omitzero"`
+	Connect   string   `json:"connect,omitempty"`
 	FirstByte string   `json:"first_byte,omitempty"`
 	Overall   string   `json:"overall,omitempty"`
 	Auth      AuthSpec `json:"auth,omitzero"`
@@ -71,6 +72,9 @@ func (s UpstreamSpec) ToConfig() (config.Upstream, error) {
 		},
 	}
 	var err error
+	if u.Timeouts.Connect, err = parseDuration("connect", s.Connect); err != nil {
+		return config.Upstream{}, err
+	}
 	if u.Timeouts.FirstByte, err = parseDuration("first_byte", s.FirstByte); err != nil {
 		return config.Upstream{}, err
 	}
@@ -105,6 +109,7 @@ func SpecFromConfig(u config.Upstream) UpstreamSpec {
 		ID:        u.ID,
 		URL:       u.URL,
 		Disabled:  u.Disabled,
+		Connect:   u.Timeouts.Connect.String(),
 		FirstByte: u.Timeouts.FirstByte.String(),
 		Overall:   u.Timeouts.Overall.String(),
 		Auth: AuthSpec{
