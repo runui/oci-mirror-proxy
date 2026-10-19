@@ -12,60 +12,52 @@ jobs:
   container:
     runs-on: ubuntu-latest
     container:
-      image: golang:1.26.8-bookworm
-    services:
-      docker:
-        image: docker:29-dind
-        env:
-          DOCKER_TLS_CERTDIR: ''
-        options: --privileged
+      image: catthehacker/ubuntu:act-latest
     env:
-      DOCKER_HOST: tcp://docker:2375
-      DOCKER_TLS_CERTDIR: ''
+      # The runner must mount its Docker socket into the job container.
+      DOCKER_HOST: unix:///var/run/docker.sock
+      # Gitea does not provide GitHub's build summary/artifact services.
+      DOCKER_BUILD_SUMMARY: 'false'
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
-      - name: Install CI tools
-        run: |
-          set -eu
-          apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl git nodejs
-          install -m 0755 -d /etc/apt/keyrings
-          curl --fail --silent --show-error --location https://download.docker.com/linux/debian/gpg \
-            -o /etc/apt/keyrings/docker.asc
-          chmod a+r /etc/apt/keyrings/docker.asc
-          printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable\n' \
-            "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/docker.list
-          apt-get update
-          apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin docker-compose-plugin
-
       - name: Check out source
         uses: https://github.com/actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Set up Buildx
+      - name: Check Docker and Compose
         run: |
           set -eu
+          if [ ! -S /var/run/docker.sock ]; then
+            echo 'Docker socket is missing. Configure the runner to mount /var/run/docker.sock into job containers.' >&2
+            exit 1
+          fi
           for attempt in $(seq 1 30); do
             if docker info >/dev/null 2>&1; then break; fi
             sleep 2
           done
           docker info
-          docker buildx create --name ci --driver docker-container --use
-          docker buildx inspect --bootstrap
           docker compose config --quiet
 
-      - name: Test
-        run: docker buildx build --target test .
+      - name: Set up Buildx
+        uses: https://github.com/docker/setup-buildx-action@v3
+        with:
+          cache-binary: false
 
-      - name: Build and publish container
+      - name: Test
+        uses: https://github.com/docker/build-push-action@v6
+        with:
+          context: .
+          target: test
+          push: false
+
+      - name: Prepare image tags
+        id: image
         env:
-          EVENT_NAME: ${{ github.event_name }}
           REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           set -eu
           registry=${SERVER_URL#https://}
@@ -73,7 +65,7 @@ jobs:
           registry=${registry%/}
           image="$registry/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           version=dev
-          set -- --tag "$image:dev"
+          tags="$image:dev"
           case "$REF" in
             refs/tags/v*)
               version=$REF_NAME
@@ -82,26 +74,31 @@ jobs:
                 *[!a-zA-Z0-9_.-]*|'') echo 'Invalid container version tag' >&2; exit 1 ;;
               esac
               [ "${#version}" -le 128 ] || { echo 'Container tag too long' >&2; exit 1; }
-              set -- --tag "$image:$version"
+              tags="$image:$version"
               # Prereleases must not move the stable latest tag.
               case "$version" in
                 *-*) ;;
-                *) set -- "$@" --tag "$image:latest" ;;
+                *) tags="$tags,$image:latest" ;;
               esac
               ;;
           esac
-          if [ "$EVENT_NAME" = push ]; then
-            [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ] || {
-              echo 'Set REGISTRY_USERNAME and REGISTRY_PASSWORD repository secrets first' >&2
-              exit 1
-            }
-            printf '%s' "$REGISTRY_PASSWORD" | docker login "$registry" \
-              --username "$REGISTRY_USERNAME" --password-stdin
-            trap 'docker logout "$registry"' EXIT
-            set -- "$@" --push
-          else
-            # Pull requests build both architectures without credentials or publication.
-            set -- "$@" --output type=oci,dest=/tmp/oci-mirror-proxy.tar
-          fi
-          docker buildx build --platform linux/amd64,linux/arm64 \
-            --build-arg "VERSION=$version" "$@" .
+          printf 'registry=%s\nversion=%s\ntags=%s\n' "$registry" "$version" "$tags" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to registry
+        if: github.event_name == 'push'
+        uses: https://github.com/docker/login-action@v3
+        with:
+          registry: ${{ steps.image.outputs.registry }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and publish container
+        uses: https://github.com/docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ steps.image.outputs.version }}
+          tags: ${{ steps.image.outputs.tags }}
+          push: ${{ github.event_name == 'push' }}
+          # Pull requests build both architectures without credentials or publication.
+          outputs: ${{ github.event_name != 'push' && 'type=oci,dest=/tmp/oci-mirror-proxy.tar' || '' }}
