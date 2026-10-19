@@ -1,5 +1,7 @@
 # Testing
 
+[English](testing.md) | [简体中文](zh-CN/testing.md)
+
 ## Layers
 
 | Layer | Where | What it proves |

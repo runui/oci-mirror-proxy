@@ -1,5 +1,7 @@
 # oci-mirror-proxy
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 A local, read-only registry mirror proxy for dockerd. It sits between dockerd and
 one or more user-chosen Registry v2 mirrors and adds what dockerd's built-in
 mirror support lacks:
@@ -56,17 +58,6 @@ curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.
 curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- --update --prefix /usr/local --service
 ```
 
-`--service` detects running systemd or OpenRC, enables startup at boot, and
-starts (or restarts) the proxy. It initializes `/etc/oci-mirror-proxy/config.yaml`
-only if missing and uses `/run/oci-mirror-proxy/admin.sock` for administration.
-The CLI discovers user configuration first, then the system configuration;
-`admin.socket` is shared by the service and management commands. For example,
-use `sudo oci-mirror-proxy status` without specifying a socket. An explicit
-`--config` selects a configuration and `--admin-socket` overrides its socket.
-Existing custom service definitions are not overwritten. Unsupported init
-systems receive a warning and only the binary is installed. System services
-run as root; do not use a user-writable installation prefix with `--service`.
-
 The script downloads the matching Linux `amd64` or `arm64` binary and verifies
 its SHA256 checksum. When no matching binary is available, or `--build` is
 specified, it builds release source using Go 1.26.8 or newer (or Go toolchain
@@ -79,8 +70,6 @@ to `sh`, not just to `curl`:
 curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/bin/oci-mirror-proxy sh -s -- --prefix "$HOME/.local"
 ```
 
-Latest-version detection follows `/releases/latest` redirects without using the
-Gitea API. For a mirror without that redirect, specify `--version` or `VERSION`.
 The default prefix is `/usr/local`, which requires write permission. Existing
 configuration is preserved; without `--service`, no configuration is initialized
 and no service is installed or restarted. Docker is never modified or restarted.

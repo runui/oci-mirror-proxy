@@ -1,5 +1,7 @@
 # Configuration reference
 
+[English](configuration.md) | [简体中文](zh-CN/configuration.md)
+
 The configuration file is YAML. Unknown keys are rejected, so a misspelt option
 fails at startup instead of being silently ignored. The file can be written
 by hand, or changed through the CLI, which validates every change before saving.

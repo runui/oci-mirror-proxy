@@ -1,5 +1,7 @@
 # Operations
 
+[English](operations.md) | [简体中文](zh-CN/operations.md)
+
 ## Commands
 
 | Command | Purpose |
