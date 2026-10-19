@@ -1,0 +1,13 @@
+# Linux host-network deployment. Copy to config/config.yaml before starting.
+# The registry API has no authentication: keep it on loopback.
+version: 1
+listen: 127.0.0.1:24817
+advertise: 127.0.0.1:24817
+admin:
+  socket: /run/oci-mirror-proxy/admin.sock
+registries:
+  docker.io:
+    origin: https://registry-1.docker.io
+    # Add your mirrors here or with `docker compose exec ... upstream add`.
+    # Empty upstreams make dockerd fall back to the official registry.
+    upstreams: []

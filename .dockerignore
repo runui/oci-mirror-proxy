@@ -1,0 +1,10 @@
+.git
+.gitea
+dist
+config
+.env
+.env.*
+*.test
+*.out
+coverage.html
+.DS_Store

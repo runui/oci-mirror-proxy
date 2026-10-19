@@ -75,6 +75,14 @@ configuration is preserved; without `--service`, no configuration is initialized
 and no service is installed or restarted. Docker is never modified or restarted.
 Restart a running proxy manually after updating without `--service`.
 
+## Docker deployment
+
+Linux Docker Engine users can deploy with [docker-compose.yaml](docker-compose.yaml). Prepare
+the writable configuration directory, then run `docker compose up -d --no-build`.
+The image supports amd64/arm64 and defaults to host networking with a loopback-only
+listener, without mounting the Docker socket. See [Docker deployment](docs/docker.md)
+for setup, local builds, and host dockerd configuration.
+
 ## Quick start
 
 ```sh
@@ -96,6 +104,7 @@ complete configuration with every option explained.
 
 ## Documentation
 
+- [docs/docker.md](docs/docker.md): Docker/Compose deployment and local builds.
 - [docs/configuration.md](docs/configuration.md): every configuration key and its default.
 - [docs/operations.md](docs/operations.md): commands, dockerd integration, reload, troubleshooting.
 - [docs/architecture.md](docs/architecture.md): components, request flow and failure handling.

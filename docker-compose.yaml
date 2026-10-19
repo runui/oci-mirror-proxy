@@ -1,0 +1,25 @@
+services:
+  oci-mirror-proxy:
+    image: ${OCI_MIRROR_PROXY_IMAGE:-git.zmide.com/bin/oci-mirror-proxy:latest}
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    # Linux host networking lets dockerd reach the loopback-only listener.
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      # Mount the directory, not the file: upstream changes use atomic rename.
+      - type: bind
+        source: ./config
+        target: /etc/oci-mirror-proxy
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /run/oci-mirror-proxy:rw,noexec,nosuid,size=1m,uid=65532,gid=65532,mode=0700
+    stop_grace_period: 30s

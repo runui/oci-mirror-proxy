@@ -57,6 +57,13 @@ curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.
 
 默认安装目录为 `/usr/local`，需要写入权限。现有配置会保留；不使用 `--service` 时，不会初始化配置、安装或重启服务。脚本不会修改或重启 Docker。不带 `--service` 更新后，需要手动重启正在运行的代理。
 
+## Docker 部署
+
+Linux Docker Engine 用户可通过 [docker-compose.yaml](docker-compose.yaml) 部署。准备好可写的
+配置目录后，执行 `docker compose up -d --no-build`。镜像支持 amd64/arm64，默认
+采用 host 网络并仅监听回环地址，无需挂载 Docker socket。配置初始化、本地构建、
+宿主机 dockerd 接入方法见 [Docker 部署指南](docs/zh-CN/docker.md)。
+
 ## 快速开始
 
 ```sh
@@ -77,6 +84,7 @@ dist/oci-mirror-proxy doctor                  # 检查代理、dockerd 和配置
 
 ## 文档
 
+- [Docker 部署](docs/zh-CN/docker.md)：Docker/Compose 部署及本地构建。
 - [配置参考](docs/zh-CN/configuration.md)：所有配置项及其默认值。
 - [运维指南](docs/zh-CN/operations.md)：命令、dockerd 集成、重载和故障排查。
 - [架构说明](docs/zh-CN/architecture.md)：组件、请求流程和故障处理。

@@ -203,6 +203,19 @@ func TestDecodeEmptyFile(t *testing.T) {
 	}
 }
 
+func TestDockerConfigIsValid(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "examples", "config.docker.yaml"))
+	if err != nil {
+		t.Fatalf("Docker config is invalid: %v", err)
+	}
+	if cfg.Listen != DefaultListen || cfg.ProxyURL() != "http://"+DefaultListen {
+		t.Fatalf("Docker config must remain loopback-only: %+v", cfg)
+	}
+	if cfg.Admin.Socket != "/run/oci-mirror-proxy/admin.sock" {
+		t.Fatalf("unexpected Docker admin socket: %q", cfg.Admin.Socket)
+	}
+}
+
 // TestExampleConfigIsValid keeps the documented example in step with the schema.
 func TestExampleConfigIsValid(t *testing.T) {
 	cfg, err := Load(filepath.Join("..", "..", "examples", "config.example.yaml"))

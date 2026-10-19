@@ -1,6 +1,8 @@
 # Build output
 /dist/
 /oci-mirror-proxy
+/config/
+/.env
 
 # Test and coverage artefacts
 *.test
