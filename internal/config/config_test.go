@@ -1,11 +1,39 @@
 package config
 
 import (
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestLogLevel(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  slog.Level
+	}{{"", slog.LevelInfo}, {"debug", slog.LevelDebug}, {"INFO", slog.LevelInfo}, {"warn", slog.LevelWarn}, {"error", slog.LevelError}} {
+		c := Default()
+		c.LogLevel = tc.value
+		got, err := c.LoggingLevel()
+		if err != nil || got != tc.want || c.Validate() != nil {
+			t.Fatalf("log level %q: got %v, %v", tc.value, got, err)
+		}
+	}
+	c := Default()
+	c.LogLevel = "verbose"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "log_level") {
+		t.Fatalf("invalid level: %v", err)
+	}
+	data, err := Encode(Default())
+	if err != nil || strings.Contains(string(data), "log_level") {
+		t.Fatalf("default configuration must omit log_level: %s, %v", data, err)
+	}
+	c, err = Decode([]byte("version: 1\nlog_level: debug\n"))
+	if err != nil || c.LogLevel != "debug" {
+		t.Fatalf("decode log_level: %+v, %v", c, err)
+	}
+}
 
 func validUpstream(id string) Upstream {
 	return Upstream{

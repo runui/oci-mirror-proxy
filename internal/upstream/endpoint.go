@@ -73,6 +73,9 @@ func NewEndpoint(ctx context.Context, spec config.Upstream, breaker config.Break
 // ID returns the upstream identifier, unique within its registry.
 func (e *Endpoint) ID() string { return e.spec.ID }
 
+// URL returns the configured base URL, never an authenticated or redirected URL.
+func (e *Endpoint) URL() string { return e.spec.URL }
+
 // Spec returns the definition this endpoint was built from.
 func (e *Endpoint) Spec() config.Upstream { return e.spec }
 

@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net"
 	"net/url"
@@ -48,6 +49,7 @@ type Config struct {
 	Version    int                 `yaml:"version"`
 	Listen     string              `yaml:"listen"`
 	Advertise  string              `yaml:"advertise,omitempty"`
+	LogLevel   string              `yaml:"log_level,omitempty"`
 	Admin      Admin               `yaml:"admin,omitempty"`
 	Registries map[string]Registry `yaml:"registries"`
 }
@@ -181,6 +183,9 @@ func defaultOrigin(alias string) string {
 // Validate reports every problem it finds, not just the first one.
 func (c Config) Validate() error {
 	var errs []error
+	if _, err := c.LoggingLevel(); err != nil {
+		errs = append(errs, err)
+	}
 	if c.Version != SchemaVersion {
 		errs = append(errs, fmt.Errorf("unsupported config version %d (want %d)", c.Version, SchemaVersion))
 	}
@@ -192,6 +197,18 @@ func (c Config) Validate() error {
 		errs = append(errs, validateRegistry(alias, c.Registries[alias]))
 	}
 	return errors.Join(errs...)
+}
+
+// LoggingLevel defaults to info without adding a field to generated configuration.
+func (c Config) LoggingLevel() (slog.Level, error) {
+	if c.LogLevel == "" {
+		return slog.LevelInfo, nil
+	}
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(c.LogLevel)); err != nil {
+		return 0, fmt.Errorf("log_level: %w", err)
+	}
+	return level, nil
 }
 
 // ProxyURL returns the address dockerd should use to reach the proxy.

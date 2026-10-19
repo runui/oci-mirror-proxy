@@ -29,6 +29,8 @@ const resumeAttempts = 3
 type Options struct {
 	ConfigPath string
 	Logger     *slog.Logger
+	// LogLevel follows configuration on reload, unless the CLI overrides it.
+	LogLevel *slog.LevelVar
 	// Secrets resolves secret references. It defaults to env: and file: providers.
 	Secrets *secret.Resolver
 	// Now is the clock used for breaker timing and token expiry.
@@ -38,11 +40,12 @@ type Options struct {
 // Service is a running proxy. Configuration changes are serialized by mu, and
 // requests never take that lock: they read the lock-free route table.
 type Service struct {
-	path   string
-	logger *slog.Logger
-	env    upstream.Env
-	table  *route.Table
-	middle []route.Middleware
+	path     string
+	logger   *slog.Logger
+	logLevel *slog.LevelVar
+	env      upstream.Env
+	table    *route.Table
+	middle   []route.Middleware
 
 	mu      sync.Mutex
 	applied config.Config
@@ -67,10 +70,11 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 		}
 	}
 	s := &Service{
-		path:   opts.ConfigPath,
-		logger: logger,
-		env:    upstream.Env{Secrets: secrets, Now: opts.Now},
-		table:  route.NewTable(),
+		path:     opts.ConfigPath,
+		logger:   logger,
+		logLevel: opts.LogLevel,
+		env:      upstream.Env{Secrets: secrets, Now: opts.Now},
+		table:    route.NewTable(),
 		middle: []route.Middleware{
 			middleware.Logging(logger),
 			middleware.Resume(resumeAttempts),
@@ -110,6 +114,10 @@ func (s *Service) apply(ctx context.Context, next config.Config, persist bool) e
 		}
 	}
 	s.applied = next
+	if s.logLevel != nil {
+		level, _ := next.LoggingLevel() // Configuration has already been validated.
+		s.logLevel.Set(level)
+	}
 	return nil
 }
 

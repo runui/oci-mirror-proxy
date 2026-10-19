@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,7 +17,7 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer) error {
 	fs := newFlagSet("serve", stderr)
 	configPath := fs.String("config", "", "configuration file (default: user or system configuration)")
 	adminSocket := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
-	logLevel := fs.String("log-level", "info", "debug, info, warn or error")
+	logLevel := fs.String("log-level", "", "debug, info, warn or error (overrides configuration; default info)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -28,15 +29,22 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	logger, err := newLogger(stderr, *logLevel)
-	if err != nil {
-		return err
+	var level slog.LevelVar
+	var configLevel *slog.LevelVar = &level
+	if *logLevel != "" {
+		var parsed slog.Level
+		if err := parsed.UnmarshalText([]byte(*logLevel)); err != nil {
+			return err
+		}
+		level.Set(parsed)
+		configLevel = nil
 	}
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: &level}))
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	svc, err := app.New(ctx, app.Options{ConfigPath: path, Logger: logger})
+	svc, err := app.New(ctx, app.Options{ConfigPath: path, Logger: logger, LogLevel: configLevel})
 	if err != nil {
 		return err
 	}

@@ -25,7 +25,9 @@ type attempt struct {
 
 // Execute implements Strategy.
 func (h Hedged) Execute(ctx context.Context, req Request, cands []Candidate) (*http.Response, error) {
+	logRoute(ctx, "hedged", cands)
 	if len(cands) == 0 {
+		debug(ctx, "route exhausted", "attempts", 0)
 		return nil, &Exhausted{}
 	}
 	maxParallel := max(h.MaxParallel, 1)
@@ -47,7 +49,7 @@ func (h Hedged) Execute(ctx context.Context, req Request, cands []Candidate) (*h
 		actx, cancel := context.WithCancel(ctx)
 		cancels = append(cancels, cancel)
 		go func() {
-			resp, err := c.Attempt(actx, req)
+			resp, err := runAttempt(actx, req, c)
 			results <- attempt{idx: idx, id: c.ID(), resp: resp, err: err}
 		}()
 	}
@@ -65,6 +67,7 @@ func (h Hedged) Execute(ctx context.Context, req Request, cands []Candidate) (*h
 		case a := <-results:
 			inFlight--
 			if a.err == nil && Acceptable(a.resp) {
+				debug(ctx, "upstream selected", candidateAttrs(cands[a.idx])...)
 				cancelExcept(cancels, a.idx)
 				go drain(results, inFlight)
 				return AttachCancel(a.resp, cancels[a.idx]), nil
@@ -83,6 +86,7 @@ func (h Hedged) Execute(ctx context.Context, req Request, cands []Candidate) (*h
 			}
 
 		case <-hedge:
+			debug(ctx, "hedge delay elapsed", "delay", h.Delay.String())
 			// Nothing has answered within Delay, so hedge with one more candidate.
 			launch()
 
@@ -92,6 +96,7 @@ func (h Hedged) Execute(ctx context.Context, req Request, cands []Candidate) (*h
 			return nil, ctx.Err()
 		}
 	}
+	debug(ctx, "route exhausted", "attempts", len(failures))
 	return nil, &Exhausted{Failures: failures}
 }
 

@@ -13,6 +13,7 @@ Durations use Go syntax: `500ms`, `5s`, `1m30s`.
 | Key | Default | Description |
 |---|---|---|
 | `version` | `1` | Schema version. Only `1` is accepted. |
+| `log_level` | `info` | Optional logging level: `debug`, `info`, `warn`, or `error`. Reloadable; an explicit `serve --log-level` overrides the file. Omitted from generated configuration by default. |
 | `listen` | `127.0.0.1:24817` | Address the registry API listens on. |
 | `advertise` | (derived) | `host:port` that dockerd uses to reach the proxy. Required in practice when `listen` is a wildcard address. Must name a concrete host. |
 | `admin.socket` | per-user default | Path of the admin socket. The default is `$XDG_RUNTIME_DIR/oci-mirror-proxy/admin.sock`, or the user cache directory when `XDG_RUNTIME_DIR` is unset. |
@@ -20,6 +21,16 @@ Durations use Go syntax: `500ms`, `5s`, `1m30s`.
 
 The address dockerd connects to is `advertise` when set. Otherwise it is
 `listen`, with wildcard hosts (`0.0.0.0`, `::`) mapped to `127.0.0.1`.
+
+For debugging, add top-level `log_level: debug` and run `oci-mirror-proxy reload`.
+Debug logs correlate requests with `request_id` and record routing strategy,
+candidates, attempt latency/status, breaker skips, hedging and the selected upstream.
+`upstream` is the mirror ID; `via` is its configured base URL. `upstream hit`
+means a successful response; `upstream selected` identifies the actual winner
+(other successful racing responses may be discarded). This does not indicate
+the mirror's internal cache status. Latency ends at response headers, not blob
+completion. Resumed attempts include `range`. Attempt debug logs do not include
+authentication headers or signed redirect URLs.
 
 ## Registries
 

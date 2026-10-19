@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -90,6 +91,55 @@ func errorCode(t *testing.T, body []byte) string {
 }
 
 const manifestPath = "/v2/library/nginx/manifests/latest"
+
+func TestConfiguredLogLevelReloadAndRouting(t *testing.T) {
+	miss := httptest.NewServer(http.NotFoundHandler())
+	defer miss.Close()
+	healthy := fakeregistry.New(t)
+	healthy.PutManifest("library/nginx", "latest", manifest)
+	cfg := baseConfig(upstreamFor("miss", miss.URL), upstreamFor("healthy", healthy.URL))
+	cfg.LogLevel = "debug"
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	var level slog.LevelVar
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: &level}))
+	svc, err := New(t.Context(), Options{ConfigPath: path, Logger: logger, LogLevel: &level})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	base := proxyFor(t, svc)
+	resp, _ := get(t, base, manifestPath)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	for _, want := range []string{"request_id=", `msg="route selected"`, "strategy=sequential", `msg="upstream attempt failed"`, "status=404", `msg="upstream hit"`, `msg="upstream selected"`, "upstream=healthy", "via=" + healthy.URL} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("missing %q in logs:\n%s", want, logs.String())
+		}
+	}
+	cfg.LogLevel = "error"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Reload(); err != nil || level.Level() != slog.LevelError {
+		t.Fatalf("reload level = %v, err = %v", level.Level(), err)
+	}
+	logs.Reset()
+	get(t, base, manifestPath)
+	if logs.Len() != 0 {
+		t.Fatalf("debug logs enabled at error level: %s", logs.String())
+	}
+	if err := os.WriteFile(path, []byte("version: 1\nlog_level: invalid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Reload(); err == nil || level.Level() != slog.LevelError {
+		t.Fatalf("invalid reload changed level: %v, %v", level.Level(), err)
+	}
+}
 
 func TestFailoverSkipsSilentUpstream(t *testing.T) {
 	silent := fakeregistry.New(t)

@@ -7,11 +7,14 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/runui/oci-mirror-proxy/internal/route"
 	"github.com/runui/oci-mirror-proxy/internal/scheduler"
 )
+
+var requestID atomic.Uint64
 
 // isContentMiss reports whether err means every upstream answered 404.
 func isContentMiss(err error) bool {
@@ -28,12 +31,12 @@ func Logging(logger *slog.Logger) route.Middleware {
 	}
 	return func(next route.Dispatcher) route.Dispatcher {
 		return route.DispatcherFunc(func(ctx context.Context, req scheduler.Request) (*http.Response, error) {
+			logger := logger.With("request_id", requestID.Add(1), "registry", req.Registry,
+				"kind", req.Kind.String(), "repo", req.Repo, "method", req.Method, "path", req.Path)
+			ctx = scheduler.WithLogger(ctx, logger)
 			start := time.Now()
 			resp, err := next.Dispatch(ctx, req)
 			attrs := []any{
-				"registry", req.Registry,
-				"kind", req.Kind.String(),
-				"repo", req.Repo,
 				"elapsed", time.Since(start).String(),
 			}
 			switch {

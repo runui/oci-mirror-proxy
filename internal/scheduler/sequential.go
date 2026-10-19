@@ -12,10 +12,12 @@ type Sequential struct{}
 
 // Execute implements Strategy.
 func (Sequential) Execute(ctx context.Context, req Request, cands []Candidate) (*http.Response, error) {
+	logRoute(ctx, "sequential", cands)
 	var failures []Failure
 	for _, c := range cands {
-		resp, err := c.Attempt(ctx, req)
+		resp, err := runAttempt(ctx, req, c)
 		if err == nil && Acceptable(resp) {
+			debug(ctx, "upstream selected", candidateAttrs(c)...)
 			return resp, nil
 		}
 		if errors.Is(err, ErrSkipped) {
@@ -27,5 +29,6 @@ func (Sequential) Execute(ctx context.Context, req Request, cands []Candidate) (
 			break // the caller has gone; trying more upstreams is pointless
 		}
 	}
+	debug(ctx, "route exhausted", "attempts", len(failures))
 	return nil, &Exhausted{Failures: failures}
 }

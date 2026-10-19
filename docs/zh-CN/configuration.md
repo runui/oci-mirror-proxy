@@ -11,12 +11,15 @@
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | `version` | `1` | 配置格式版本，仅接受 `1`。 |
+| `log_level` | `info` | 可选日志级别：`debug`、`info`、`warn`、`error`。支持 reload；显式指定的 `serve --log-level` 优先于配置文件。默认不写入生成的配置。 |
 | `listen` | `127.0.0.1:24817` | 仓库 API 的监听地址。 |
 | `advertise` | 自动推导 | dockerd 连接代理时使用的 `host:port`。当 `listen` 使用通配地址时，实际部署应显式设置此项，且必须指定具体主机。 |
 | `admin.socket` | 用户级默认路径 | 管理套接字路径。默认为 `$XDG_RUNTIME_DIR/oci-mirror-proxy/admin.sock`；未设置 `XDG_RUNTIME_DIR` 时使用用户缓存目录。 |
 | `registries` | `docker.io` | 仓库别名到仓库配置的映射。 |
 
 设置了 `advertise` 时，dockerd 使用该地址；否则使用 `listen`，其中通配主机地址（`0.0.0.0`、`::`）会映射为 `127.0.0.1`。
+
+调试时可手动添加顶层 `log_level: debug`，再执行 `oci-mirror-proxy reload`。debug 日志通过 `request_id` 关联请求，包含路由策略、候选上游、尝试耗时和状态、熔断跳过、竞速启动与最终选中的上游。`upstream` 是镜像站 ID，`via` 是配置的镜像站基础 URL；`upstream hit` 表示收到成功响应，`upstream selected` 表示实际选用该响应（竞速中其他成功响应不一定被采用）。这不代表镜像站内部缓存命中。耗时记录到收到响应头，不代表整个镜像层下载完成；断点续传尝试包含 `range` 字段。上游尝试的调试日志不记录认证头或重定向签名 URL。
 
 ## 仓库
 
