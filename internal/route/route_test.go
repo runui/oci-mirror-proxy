@@ -17,7 +17,7 @@ type idCandidate string
 
 func (c idCandidate) ID() string { return string(c) }
 
-func (c idCandidate) Attempt(context.Context, scheduler.Request) (*http.Response, error) {
+func (c idCandidate) Attempt(context.Context, scheduler.Request) (*scheduler.Result, error) {
 	return nil, scheduler.ErrSkipped
 }
 
@@ -25,15 +25,15 @@ func TestChainOrderIsOutermostFirst(t *testing.T) {
 	var order []string
 	layer := func(name string) Middleware {
 		return func(next Dispatcher) Dispatcher {
-			return DispatcherFunc(func(ctx context.Context, req scheduler.Request) (*http.Response, error) {
+			return DispatcherFunc(func(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
 				order = append(order, name)
 				return next.Dispatch(ctx, req)
 			})
 		}
 	}
-	base := DispatcherFunc(func(context.Context, scheduler.Request) (*http.Response, error) {
+	base := DispatcherFunc(func(context.Context, scheduler.Request) (*scheduler.Result, error) {
 		order = append(order, "base")
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}}, nil
+		return scheduler.Stream(&http.Response{StatusCode: http.StatusOK, Header: http.Header{}}), nil
 	})
 	if _, err := Chain(base, layer("outer"), layer("inner")).Dispatch(t.Context(), scheduler.Request{}); err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestChainOrderIsOutermostFirst(t *testing.T) {
 
 func TestRouteUsesCurrentCandidates(t *testing.T) {
 	var seen []string
-	strategy := strategyFunc(func(_ context.Context, _ scheduler.Request, cands []scheduler.Candidate) (*http.Response, error) {
+	strategy := strategyFunc(func(_ context.Context, _ scheduler.Request, cands []scheduler.Candidate) (*scheduler.Result, error) {
 		for _, c := range cands {
 			seen = append(seen, c.ID())
 		}
@@ -58,9 +58,9 @@ func TestRouteUsesCurrentCandidates(t *testing.T) {
 	}
 }
 
-type strategyFunc func(context.Context, scheduler.Request, []scheduler.Candidate) (*http.Response, error)
+type strategyFunc func(context.Context, scheduler.Request, []scheduler.Candidate) (*scheduler.Result, error)
 
-func (f strategyFunc) Execute(ctx context.Context, req scheduler.Request, c []scheduler.Candidate) (*http.Response, error) {
+func (f strategyFunc) Execute(ctx context.Context, req scheduler.Request, c []scheduler.Candidate) (*scheduler.Result, error) {
 	return f(ctx, req, c)
 }
 

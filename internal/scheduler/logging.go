@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"time"
 )
 
@@ -22,6 +20,12 @@ func debug(ctx context.Context, message string, attrs ...any) {
 	}
 }
 
+// DebugDelivery records the decision, never the signed download capability.
+// A handoff log means headers were verified, not that the client finished it.
+func DebugDelivery(ctx context.Context, mode, reason string) {
+	debug(ctx, "blob delivery selected", "delivery", mode, "reason", reason)
+}
+
 func candidateAttrs(c Candidate) []any {
 	attrs := []any{"upstream", c.ID()}
 	if endpoint, ok := c.(interface{ URL() string }); ok {
@@ -30,7 +34,7 @@ func candidateAttrs(c Candidate) []any {
 	return attrs
 }
 
-func runAttempt(ctx context.Context, req Request, c Candidate) (*http.Response, error) {
+func runAttempt(ctx context.Context, req Request, c Candidate) (*Result, error) {
 	attrs := candidateAttrs(c)
 	attrs = append(attrs, "range", req.Header.Get("Range"))
 	debug(ctx, "upstream attempt started", attrs...)
@@ -42,12 +46,7 @@ func runAttempt(ctx context.Context, req Request, c Candidate) (*http.Response, 
 	}
 	if err != nil {
 		// HTTP errors can contain signed redirect URLs; log only their cause.
-		loggedErr := err
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			loggedErr = urlErr.Err
-		}
-		attrs = append(attrs, "error", loggedErr)
+		attrs = append(attrs, "error", withoutURL(err))
 	}
 	switch {
 	case errors.Is(err, ErrSkipped):

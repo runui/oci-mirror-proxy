@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"net/http"
 	"time"
 )
 
@@ -19,12 +18,12 @@ type Hedged struct {
 type attempt struct {
 	idx  int
 	id   string
-	resp *http.Response
+	resp *Result
 	err  error
 }
 
 // Execute implements Strategy.
-func (h Hedged) Execute(ctx context.Context, req Request, cands []Candidate) (*http.Response, error) {
+func (h Hedged) Execute(ctx context.Context, req Request, cands []Candidate) (*Result, error) {
 	logRoute(ctx, "hedged", cands)
 	if len(cands) == 0 {
 		debug(ctx, "route exhausted", "attempts", 0)

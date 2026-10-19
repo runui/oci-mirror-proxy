@@ -32,11 +32,11 @@ func (b *brokenBody) Close() error { return nil }
 func scripted(responses ...func(req scheduler.Request) *http.Response) (route.Dispatcher, *[]scheduler.Request) {
 	var seen []scheduler.Request
 	i := 0
-	d := route.DispatcherFunc(func(_ context.Context, req scheduler.Request) (*http.Response, error) {
+	d := route.DispatcherFunc(func(_ context.Context, req scheduler.Request) (*scheduler.Result, error) {
 		seen = append(seen, req)
 		resp := responses[i](req)
 		i++
-		return resp, nil
+		return scheduler.Stream(resp), nil
 	})
 	return d, &seen
 }
@@ -74,7 +74,7 @@ func brokenPartial(start, data, total string) func(scheduler.Request) *http.Resp
 	}
 }
 
-func resumed(next route.Dispatcher, maxResumes int, req scheduler.Request) (*http.Response, error) {
+func resumed(next route.Dispatcher, maxResumes int, req scheduler.Request) (*scheduler.Result, error) {
 	return Resume(maxResumes)(next).Dispatch(context.Background(), req)
 }
 
@@ -82,13 +82,18 @@ func TestResumeContinuesFromCurrentOffset(t *testing.T) {
 	next, seen := scripted(
 		broken("01234"),
 		func(req scheduler.Request) *http.Response {
+			if req.AllowBlobRedirect {
+				t.Error("internal resume must require a stream after bytes were committed")
+			}
 			if got := req.Header.Get("Range"); got != "bytes=5-" {
 				t.Errorf("resume Range = %q, want bytes=5-", got)
 			}
 			return partial("5", "56789", "9/10")(req)
 		},
 	)
-	resp, err := resumed(next, 3, blobRequest())
+	req := blobRequest()
+	req.AllowBlobRedirect = true
+	resp, err := resumed(next, 3, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,8 +145,8 @@ func TestResumeRejectsMismatchedContentRange(t *testing.T) {
 
 func TestResumeLeavesRangeRequestsAlone(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("partial"))
-	next := route.DispatcherFunc(func(context.Context, scheduler.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusPartialContent, Header: http.Header{}, Body: body}, nil
+	next := route.DispatcherFunc(func(context.Context, scheduler.Request) (*scheduler.Result, error) {
+		return scheduler.Stream(&http.Response{StatusCode: http.StatusPartialContent, Header: http.Header{}, Body: body}), nil
 	})
 	req := blobRequest()
 	req.Header.Set("Range", "bytes=10-")
@@ -179,8 +184,8 @@ func TestResumeStopsAfterMaxResumes(t *testing.T) {
 
 func TestNonBlobRequestsAreNotWrapped(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("{}"))
-	next := route.DispatcherFunc(func(context.Context, scheduler.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: body}, nil
+	next := route.DispatcherFunc(func(context.Context, scheduler.Request) (*scheduler.Result, error) {
+		return scheduler.Stream(&http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: body}), nil
 	})
 	req := blobRequest()
 	req.Kind = ociapi.KindManifest

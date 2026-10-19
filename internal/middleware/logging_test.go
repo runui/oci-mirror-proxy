@@ -16,7 +16,7 @@ func logged(t *testing.T, err error) string {
 	t.Helper()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	next := route.DispatcherFunc(func(context.Context, scheduler.Request) (*http.Response, error) {
+	next := route.DispatcherFunc(func(context.Context, scheduler.Request) (*scheduler.Result, error) {
 		return nil, err
 	})
 	_, _ = Logging(logger)(next).Dispatch(t.Context(), scheduler.Request{Registry: "docker.io"})

@@ -25,27 +25,27 @@ func (f fakeRoutes) Lookup(alias string) (route.Dispatcher, bool) {
 // recorder captures the last request handed to the dispatcher.
 type recorder struct {
 	last scheduler.Request
-	fn   func() (*http.Response, error)
+	fn   func() (*scheduler.Result, error)
 }
 
-func (r *recorder) Dispatch(_ context.Context, req scheduler.Request) (*http.Response, error) {
+func (r *recorder) Dispatch(_ context.Context, req scheduler.Request) (*scheduler.Result, error) {
 	r.last = req
 	return r.fn()
 }
 
-func okResponse(body string) (*http.Response, error) {
+func okResponse(body string) (*scheduler.Result, error) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	h.Set("Docker-Content-Digest", "sha256:abc")
 	h.Set("X-Internal-Secret", "must-not-leak")
-	return &http.Response{
+	return scheduler.Stream(&http.Response{
 		StatusCode: http.StatusOK,
 		Header:     h,
 		Body:       io.NopCloser(strings.NewReader(body)),
-	}, nil
+	}), nil
 }
 
-func exhausted(statuses ...int) (*http.Response, error) {
+func exhausted(statuses ...int) (*scheduler.Result, error) {
 	ex := &scheduler.Exhausted{}
 	for _, s := range statuses {
 		ex.Failures = append(ex.Failures, scheduler.Failure{Candidate: "x", Status: s})
@@ -74,7 +74,7 @@ func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 }
 
 func TestPingIsAnsweredLocally(t *testing.T) {
-	rec := serve(t, fakeRoutes{"docker.io": &recorder{fn: func() (*http.Response, error) {
+	rec := serve(t, fakeRoutes{"docker.io": &recorder{fn: func() (*scheduler.Result, error) {
 		t.Error("ping must not reach upstreams")
 		return nil, nil
 	}}}, http.MethodGet, "/v2/", nil)
@@ -101,7 +101,7 @@ func TestMethodsOtherThanGetAndHeadAreRejected(t *testing.T) {
 }
 
 func TestManifestIsRelayedWithAllowlistedHeaders(t *testing.T) {
-	rec := &recorder{fn: func() (*http.Response, error) { return okResponse(`{"schemaVersion":2}`) }}
+	rec := &recorder{fn: func() (*scheduler.Result, error) { return okResponse(`{"schemaVersion":2}`) }}
 	h := http.Header{}
 	h.Set("Accept", "application/vnd.oci.image.manifest.v1+json")
 	h.Set("Authorization", "Basic c2VjcmV0")
@@ -129,7 +129,7 @@ func TestManifestIsRelayedWithAllowlistedHeaders(t *testing.T) {
 }
 
 func TestHeadHasNoBody(t *testing.T) {
-	rec := &recorder{fn: func() (*http.Response, error) { return okResponse("payload") }}
+	rec := &recorder{fn: func() (*scheduler.Result, error) { return okResponse("payload") }}
 	resp := serve(t, fakeRoutes{"docker.io": rec}, http.MethodHead, "/v2/library/nginx/manifests/latest", nil)
 	if resp.Code != http.StatusOK || resp.Body.Len() != 0 {
 		t.Fatalf("HEAD returned %d with body %q", resp.Code, resp.Body.String())
@@ -148,7 +148,7 @@ func TestAllNotFoundMapsToRegistryNotFound(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := &recorder{fn: func() (*http.Response, error) { return exhausted(404, 404) }}
+			rec := &recorder{fn: func() (*scheduler.Result, error) { return exhausted(404, 404) }}
 			resp := serve(t, fakeRoutes{"docker.io": rec}, http.MethodGet, tc.path, nil)
 			if resp.Code != http.StatusNotFound {
 				t.Fatalf("status = %d, want 404", resp.Code)
@@ -161,7 +161,7 @@ func TestAllNotFoundMapsToRegistryNotFound(t *testing.T) {
 }
 
 func TestReferrersNotFoundIsEmptyIndex(t *testing.T) {
-	rec := &recorder{fn: func() (*http.Response, error) { return exhausted(404) }}
+	rec := &recorder{fn: func() (*scheduler.Result, error) { return exhausted(404) }}
 	resp := serve(t, fakeRoutes{"docker.io": rec}, http.MethodGet, "/v2/library/nginx/referrers/sha256:"+strings.Repeat("a", 64), nil)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 with an empty index", resp.Code)
@@ -175,7 +175,7 @@ func TestReferrersNotFoundIsEmptyIndex(t *testing.T) {
 }
 
 func TestMixedFailuresBecomeBadGateway(t *testing.T) {
-	rec := &recorder{fn: func() (*http.Response, error) { return exhausted(404, 503) }}
+	rec := &recorder{fn: func() (*scheduler.Result, error) { return exhausted(404, 503) }}
 	resp := serve(t, fakeRoutes{"docker.io": rec}, http.MethodGet, "/v2/library/nginx/manifests/latest", nil)
 	if resp.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502 when any upstream failed for a non-404 reason", resp.Code)
@@ -188,7 +188,7 @@ func TestMixedFailuresBecomeBadGateway(t *testing.T) {
 func TestClientCancellationWritesNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	rec := &recorder{fn: func() (*http.Response, error) { return nil, context.Canceled }}
+	rec := &recorder{fn: func() (*scheduler.Result, error) { return nil, context.Canceled }}
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/v2/library/nginx/manifests/latest", nil)
 	w := httptest.NewRecorder()
 	New(fakeRoutes{"docker.io": rec}).ServeHTTP(w, req)
@@ -198,7 +198,7 @@ func TestClientCancellationWritesNothing(t *testing.T) {
 }
 
 func TestUnexpectedErrorIsBadGateway(t *testing.T) {
-	rec := &recorder{fn: func() (*http.Response, error) { return nil, errors.New("boom") }}
+	rec := &recorder{fn: func() (*scheduler.Result, error) { return nil, errors.New("boom") }}
 	resp := serve(t, fakeRoutes{"docker.io": rec}, http.MethodGet, "/v2/library/nginx/manifests/latest", nil)
 	if resp.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", resp.Code)
@@ -206,7 +206,7 @@ func TestUnexpectedErrorIsBadGateway(t *testing.T) {
 }
 
 func TestPrefixedAliasDispatchesToItsRegistry(t *testing.T) {
-	rec := &recorder{fn: func() (*http.Response, error) { return okResponse("{}") }}
+	rec := &recorder{fn: func() (*scheduler.Result, error) { return okResponse("{}") }}
 	resp := serve(t, fakeRoutes{"ghcr.io": rec}, http.MethodGet, "/ghcr.io/v2/owner/repo/manifests/v1", nil)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d", resp.Code)
@@ -217,11 +217,28 @@ func TestPrefixedAliasDispatchesToItsRegistry(t *testing.T) {
 }
 
 func TestMalformedPathIsNotFound(t *testing.T) {
-	rec := serve(t, fakeRoutes{"docker.io": &recorder{fn: func() (*http.Response, error) {
+	rec := serve(t, fakeRoutes{"docker.io": &recorder{fn: func() (*scheduler.Result, error) {
 		t.Error("malformed path must not reach upstreams")
 		return nil, nil
 	}}}, http.MethodGet, "/v2/../etc/passwd", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestBlobHandoffHasNoPayloadOrLeakedHeaders(t *testing.T) {
+	location := "https://cdn.example/blob?signature=private%2Fvalue"
+	rec := &recorder{fn: func() (*scheduler.Result, error) {
+		result := scheduler.BlobRedirect(location)
+		result.Header.Set("Content-Length", "1073741824")
+		result.Header.Set("Set-Cookie", "secret")
+		return result, nil
+	}}
+	resp := serve(t, fakeRoutes{"docker.io": rec}, http.MethodGet, "/v2/library/nginx/blobs/sha256:"+strings.Repeat("a", 64), nil)
+	if resp.Code != 307 || resp.Header().Get("Location") != location || resp.Header().Get("Cache-Control") != "no-store" || resp.Header().Get("Content-Length") != "0" || resp.Body.Len() != 0 || resp.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("unsafe handoff: status=%d headers=%v body=%q", resp.Code, resp.Header(), resp.Body.String())
+	}
+	if !rec.last.AllowBlobRedirect {
+		t.Fatal("frontend did not allow per-request download selection")
 	}
 }

@@ -29,7 +29,7 @@ var ErrRangeIgnored = errors.New("upstream ignored the Range request")
 // upstream can only cause a failed pull, never a corrupted image.
 func Resume(maxResumes int) route.Middleware {
 	return func(next route.Dispatcher) route.Dispatcher {
-		return route.DispatcherFunc(func(ctx context.Context, req scheduler.Request) (*http.Response, error) {
+		return route.DispatcherFunc(func(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
 			resp, err := next.Dispatch(ctx, req)
 			if err != nil || !resumable(req, resp) {
 				return resp, err
@@ -48,7 +48,7 @@ func Resume(maxResumes int) route.Middleware {
 
 // resumable reports whether a response is a whole-blob download that can be
 // continued. Client range requests are passed through untouched.
-func resumable(req scheduler.Request, resp *http.Response) bool {
+func resumable(req scheduler.Request, resp *scheduler.Result) bool {
 	return req.Kind == ociapi.KindBlob &&
 		req.Method == http.MethodGet &&
 		req.Header.Get("Range") == "" &&
@@ -94,6 +94,9 @@ func (b *resumeBody) reopen() error {
 	_ = b.body.Close()
 
 	req := b.req
+	// The original response is already committed. A resumed request must return
+	// bytes even when its upstream offers a perfectly valid download redirect.
+	req.AllowBlobRedirect = false
 	req.Header = b.req.Header.Clone()
 	if req.Header == nil {
 		req.Header = make(http.Header)

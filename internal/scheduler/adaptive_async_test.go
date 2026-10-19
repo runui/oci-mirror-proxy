@@ -19,7 +19,7 @@ func TestAdaptiveProbeOffsetReconciliation(t *testing.T) {
 			old := &trackingBody{Reader: strings.NewReader("old")}
 			alternate := &trackingBody{Reader: strings.NewReader("tail")}
 			b := &adaptiveBody{body: old, offset: int64(100 + advance), current: "old"}
-			r := probeResult{id: "new", offset: 100, sample: []byte("0123456789abcdef"), resp: &http.Response{Body: alternate}, cancel: func() {}}
+			r := probeResult{id: "new", offset: 100, sample: []byte("0123456789abcdef"), resp: Stream(&http.Response{Body: alternate}), cancel: func() {}}
 			adopted := b.adopt(r)
 			defer b.Close()
 			if adopted != (advance < 16) {
@@ -49,8 +49,8 @@ func TestAdaptiveRecoversStalledRead(t *testing.T) {
 	data := strings.Repeat("x", 1024*1024)
 	ctx, cancel := context.WithCancel(t.Context())
 	old := &stalledBody{done: make(chan struct{})}
-	c := rangeCandidate{"fast", func(context.Context, Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 206, ContentLength: int64(len(data)), Header: http.Header{"Content-Range": {"bytes 0-1048575/1048576"}}, Body: io.NopCloser(strings.NewReader(data))}, nil
+	c := rangeCandidate{"fast", func(context.Context, Request) (*Result, error) {
+		return Stream(&http.Response{StatusCode: 206, ContentLength: int64(len(data)), Header: http.Header{"Content-Range": {"bytes 0-1048575/1048576"}}, Body: io.NopCloser(strings.NewReader(data))}), nil
 	}}
 	b := &adaptiveBody{ctx: ctx, cancel: cancel, body: old, total: int64(len(data)), current: "stalled", since: time.Now(), tried: map[string]bool{}, candidates: []Candidate{c}, policy: Adaptive{Window: 10 * time.Millisecond, MinBytesPerSecond: 1024, ProbeTimeout: time.Second, MaxSwitches: 1}}
 	defer b.Close()
@@ -94,7 +94,7 @@ func TestAdaptiveProbeDoesNotPauseOriginal(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	old := &pacedBody{remaining: 128 * 1024}
 	var progress atomic.Int64
-	c := rangeCandidate{"unavailable", func(ctx context.Context, _ Request) (*http.Response, error) {
+	c := rangeCandidate{"unavailable", func(ctx context.Context, _ Request) (*Result, error) {
 		before := old.reads.Load()
 		<-ctx.Done()
 		progress.Store(old.reads.Load() - before)
@@ -128,7 +128,7 @@ func TestAdaptiveCloseUnblocksRead(t *testing.T) {
 func TestAdaptiveCloseCancelsProbe(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	started, finished := make(chan struct{}), make(chan struct{})
-	c := rangeCandidate{"pending", func(ctx context.Context, _ Request) (*http.Response, error) {
+	c := rangeCandidate{"pending", func(ctx context.Context, _ Request) (*Result, error) {
 		close(started)
 		<-ctx.Done()
 		close(finished)
@@ -143,4 +143,44 @@ func TestAdaptiveCloseCancelsProbe(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("probe survived Close")
 	}
+}
+
+// A transport may still write into p while cancellation is taking effect.
+// Read must not return that borrowed buffer until the underlying read exits.
+type lateWriteBody struct {
+	started chan struct{}
+	closed  chan struct{}
+	exited  chan struct{}
+	once    sync.Once
+}
+
+func (b *lateWriteBody) Read(p []byte) (int, error) {
+	close(b.started)
+	<-b.closed
+	time.Sleep(10 * time.Millisecond)
+	clear(p)
+	close(b.exited)
+	return 0, io.ErrClosedPipe
+}
+func (b *lateWriteBody) Close() error { b.once.Do(func() { close(b.closed) }); return nil }
+
+func TestAdaptiveJoinsBorrowedBufferReadOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	old := &lateWriteBody{started: make(chan struct{}), closed: make(chan struct{}), exited: make(chan struct{})}
+	b := &adaptiveBody{ctx: ctx, cancel: cancel, body: old, since: time.Now(), policy: Adaptive{Window: time.Hour}}
+	done := make(chan struct{})
+	go func() { b.Read(make([]byte, 1024)); close(done) }()
+	<-old.started
+	cancel()
+	select {
+	case <-done:
+		select {
+		case <-old.exited:
+		default:
+			t.Fatal("Read returned while transport still owned p")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not join old read")
+	}
+	b.Close()
 }

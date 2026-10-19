@@ -74,12 +74,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := scheduler.Request{
-		Registry: parsed.Alias,
-		Kind:     parsed.Kind,
-		Method:   r.Method,
-		Repo:     parsed.Repo,
-		Path:     parsed.Path,
-		Header:   forwardedHeaders(r.Header),
+		Registry:          parsed.Alias,
+		Kind:              parsed.Kind,
+		Method:            r.Method,
+		Repo:              parsed.Repo,
+		Path:              parsed.Path,
+		Header:            forwardedHeaders(r.Header),
+		AllowBlobRedirect: true,
+		ClientHost:        r.Host,
 	}
 	resp, err := dispatcher.Dispatch(r.Context(), req)
 	if err != nil {
@@ -87,6 +89,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if location := resp.RedirectLocation(); location != "" {
+		// Do not use http.Redirect: its HTML body repeats the signed URL. A
+		// handoff commits ownership to the client; failures after this point
+		// cannot fall back to proxy-side resumption. Never cache expiring URLs.
+		w.Header().Set("Location", location)
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Length", "0")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+		return
+	}
 
 	relayHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)

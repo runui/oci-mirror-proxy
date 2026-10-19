@@ -89,7 +89,7 @@ func newTestEndpoint(t *testing.T, u config.Upstream, threshold int) *Endpoint {
 	return e
 }
 
-func getManifest(t *testing.T, e *Endpoint, repo string) (*http.Response, error) {
+func getManifest(t *testing.T, e *Endpoint, repo string) (*scheduler.Result, error) {
 	t.Helper()
 	return e.Attempt(t.Context(), scheduler.Request{
 		Kind:   ociapi.KindManifest,

@@ -14,7 +14,7 @@ import (
 
 type rangeCandidate struct {
 	id string
-	fn func(context.Context, Request) (*http.Response, error)
+	fn func(context.Context, Request) (*Result, error)
 }
 
 func (b *adaptiveBody) trySwitch(rate float64) {
@@ -28,7 +28,7 @@ func (b *adaptiveBody) trySwitch(rate float64) {
 }
 
 func (c rangeCandidate) ID() string { return c.id }
-func (c rangeCandidate) Attempt(ctx context.Context, r Request) (*http.Response, error) {
+func (c rangeCandidate) Attempt(ctx context.Context, r Request) (*Result, error) {
 	return c.fn(ctx, r)
 }
 
@@ -37,11 +37,11 @@ func TestAdaptiveSwitchIntegrity(t *testing.T) {
 		t.Run(fmt.Sprint("invalid_range=", invalid), func(t *testing.T) {
 			data := strings.Repeat("0123456789abcdef", 8192)
 			old := &trackingBody{Reader: strings.NewReader(data)}
-			primary := rangeCandidate{"slow", func(context.Context, Request) (*http.Response, error) {
-				return &http.Response{StatusCode: 200, ContentLength: int64(len(data)), Body: old}, nil
+			primary := rangeCandidate{"slow", func(context.Context, Request) (*Result, error) {
+				return Stream(&http.Response{StatusCode: 200, ContentLength: int64(len(data)), Body: old}), nil
 			}}
 			calls := 0
-			alternate := rangeCandidate{"fast", func(ctx context.Context, r Request) (*http.Response, error) {
+			alternate := rangeCandidate{"fast", func(ctx context.Context, r Request) (*Result, error) {
 				calls++
 				if r.Header.Get("Range") != "bytes=1024-" {
 					t.Fatalf("range=%s", r.Header.Get("Range"))
@@ -50,7 +50,7 @@ func TestAdaptiveSwitchIntegrity(t *testing.T) {
 				if invalid {
 					start++
 				}
-				return &http.Response{StatusCode: 206, ContentLength: int64(len(data) - 1024), Header: http.Header{"Content-Range": {fmt.Sprintf("bytes %d-%d/%d", start, len(data)-1, len(data))}}, Body: io.NopCloser(strings.NewReader(data[1024:]))}, nil
+				return Stream(&http.Response{StatusCode: 206, ContentLength: int64(len(data) - 1024), Header: http.Header{"Content-Range": {fmt.Sprintf("bytes %d-%d/%d", start, len(data)-1, len(data))}}, Body: io.NopCloser(strings.NewReader(data[1024:]))}), nil
 			}}
 			a := Adaptive{Base: Sequential{}, Window: time.Second, MinBytesPerSecond: 1 << 30, ProbeTimeout: time.Second, MaxSwitches: 2}
 			resp, err := a.Execute(t.Context(), Request{Kind: ociapi.KindBlob, Method: "GET"}, []Candidate{primary, alternate})
@@ -91,8 +91,8 @@ func TestAdaptiveProbeTimeoutKeepsOldStream(t *testing.T) {
 
 func TestAdaptiveLeavesClientRangesUntouched(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("partial"))
-	c := rangeCandidate{"range", func(context.Context, Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 206, ContentLength: 7, Body: body}, nil
+	c := rangeCandidate{"range", func(context.Context, Request) (*Result, error) {
+		return Stream(&http.Response{StatusCode: 206, ContentLength: 7, Body: body}), nil
 	}}
 	a := Adaptive{Base: Sequential{}}
 	resp, err := a.Execute(t.Context(), Request{Kind: ociapi.KindBlob, Method: "GET", Header: http.Header{"Range": {"bytes=10-"}}}, []Candidate{c})
@@ -102,5 +102,43 @@ func TestAdaptiveLeavesClientRangesUntouched(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.Body != body {
 		t.Fatal("client range was wrapped")
+	}
+}
+
+func TestAdaptiveChoosesOwnershipBeforeAttempt(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		count        int
+		ranged       bool
+		wantRedirect bool
+	}{
+		{"whole_with_alternate", 2, false, false},
+		{"single_candidate", 1, false, true},
+		{"client_range", 2, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := rangeCandidate{"source", func(_ context.Context, req Request) (*Result, error) {
+				if req.AllowBlobRedirect != tc.wantRedirect {
+					t.Fatalf("allow redirect=%v, want %v", req.AllowBlobRedirect, tc.wantRedirect)
+				}
+				if req.AllowBlobRedirect {
+					return BlobRedirect("https://cdn.example/blob"), nil
+				}
+				return Stream(&http.Response{StatusCode: 200, Body: http.NoBody}), nil
+			}}
+			req := Request{Kind: ociapi.KindBlob, Method: "GET", Header: make(http.Header), AllowBlobRedirect: true}
+			if tc.ranged {
+				req.Header.Set("Range", "bytes=5-")
+			}
+			cands := []Candidate{c}
+			if tc.count > 1 {
+				cands = append(cands, skipped("alternate"))
+			}
+			resp, err := (Adaptive{Base: Sequential{}}).Execute(t.Context(), req, cands)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+		})
 	}
 }

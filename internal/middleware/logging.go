@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"sync/atomic"
 	"time"
 
@@ -30,7 +29,7 @@ func Logging(logger *slog.Logger) route.Middleware {
 		logger = slog.Default()
 	}
 	return func(next route.Dispatcher) route.Dispatcher {
-		return route.DispatcherFunc(func(ctx context.Context, req scheduler.Request) (*http.Response, error) {
+		return route.DispatcherFunc(func(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
 			logger := logger.With("request_id", requestID.Add(1), "registry", req.Registry,
 				"kind", req.Kind.String(), "repo", req.Repo, "method", req.Method, "path", req.Path)
 			ctx = scheduler.WithLogger(ctx, logger)

@@ -11,11 +11,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/runui/oci-mirror-proxy/internal/admin"
 	"github.com/runui/oci-mirror-proxy/internal/config"
+	"github.com/runui/oci-mirror-proxy/internal/ociapi"
+	"github.com/runui/oci-mirror-proxy/internal/route"
+	"github.com/runui/oci-mirror-proxy/internal/scheduler"
 	"github.com/runui/oci-mirror-proxy/internal/testutil/fakeregistry"
 )
 
@@ -91,6 +95,54 @@ func errorCode(t *testing.T, body []byte) string {
 }
 
 const manifestPath = "/v2/library/nginx/manifests/latest"
+
+func TestDeliveryPolicyReloadKeepsDispatcherSnapshot(t *testing.T) {
+	var attempts atomic.Int32
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/download" {
+			w.Header().Set("Content-Length", "7")
+			io.WriteString(w, "payload")
+			return
+		}
+		attempts.Add(1)
+		w.Header().Set("Location", "/download")
+		w.WriteHeader(307)
+	}))
+	defer registry.Close()
+	cfg := baseConfig(upstreamFor("primary", registry.URL), upstreamFor("alternate", registry.URL))
+	svc, path := newService(t, cfg)
+	old, _ := svc.table.Lookup("docker.io")
+	reg := cfg.Registries["docker.io"]
+	reg.Adaptive.Enabled = true
+	cfg.Registries["docker.io"] = reg
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := svc.table.Lookup("docker.io")
+	check := func(d route.Dispatcher, wantAttempts int32) {
+		t.Helper()
+		attempts.Store(0)
+		req := scheduler.Request{Kind: ociapi.KindBlob, Method: http.MethodGet,
+			Path: "/v2/library/test/blobs/sha256:" + strings.Repeat("a", 64), AllowBlobRedirect: true}
+		resp, err := d.Dispatch(t.Context(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || string(body) != "payload" || attempts.Load() != wantAttempts {
+			t.Fatalf("body=%q err=%v attempts=%d, want %d", body, err, attempts.Load(), wantAttempts)
+		}
+	}
+	// The captured pre-reload dispatcher still permits delegation. Its HTTP
+	// target fails the safety check, so it reissues once for relay. The new
+	// adaptive dispatcher owns the stream from the start and sends only once.
+	check(old, 2)
+	check(current, 1)
+}
 
 func TestConfiguredLogLevelReloadAndRouting(t *testing.T) {
 	miss := httptest.NewServer(http.NotFoundHandler())

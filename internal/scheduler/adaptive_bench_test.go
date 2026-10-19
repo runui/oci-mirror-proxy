@@ -21,8 +21,8 @@ func BenchmarkAdaptiveDownload(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			b.ReportAllocs()
-			candidate := rangeCandidate{"source", func(context.Context, Request) (*http.Response, error) {
-				return &http.Response{StatusCode: 200, ContentLength: int64(len(data)), Body: io.NopCloser(bytes.NewReader(data))}, nil
+			candidate := rangeCandidate{"source", func(context.Context, Request) (*Result, error) {
+				return Stream(&http.Response{StatusCode: 200, ContentLength: int64(len(data)), Body: io.NopCloser(bytes.NewReader(data))}), nil
 			}}
 			var strategy Strategy = Sequential{}
 			if enabled {
@@ -31,7 +31,9 @@ func BenchmarkAdaptiveDownload(b *testing.B) {
 			buf := make([]byte, 32*1024)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				resp, err := strategy.Execute(b.Context(), Request{Kind: ociapi.KindBlob, Method: "GET"}, []Candidate{candidate})
+				// Retain an alternate so this benchmark measures the adaptive
+				// stream, not the no-alternate fast path.
+				resp, err := strategy.Execute(b.Context(), Request{Kind: ociapi.KindBlob, Method: "GET"}, []Candidate{candidate, candidate})
 				if err != nil {
 					b.Fatal(err)
 				}

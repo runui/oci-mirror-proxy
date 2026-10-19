@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"net/http"
 )
 
 // Sequential tries candidates one at a time, in priority order. A candidate is
@@ -11,7 +10,7 @@ import (
 type Sequential struct{}
 
 // Execute implements Strategy.
-func (Sequential) Execute(ctx context.Context, req Request, cands []Candidate) (*http.Response, error) {
+func (Sequential) Execute(ctx context.Context, req Request, cands []Candidate) (*Result, error) {
 	logRoute(ctx, "sequential", cands)
 	var failures []Failure
 	for _, c := range cands {

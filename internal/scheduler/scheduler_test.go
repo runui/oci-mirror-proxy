@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,25 +24,25 @@ func (b *trackingBody) Close() error {
 	return nil
 }
 
-func newResponse(code int, body string) (*http.Response, *trackingBody) {
+func newResponse(code int, body string) (*Result, *trackingBody) {
 	b := &trackingBody{Reader: strings.NewReader(body)}
-	return &http.Response{StatusCode: code, Body: b}, b
+	return Stream(&http.Response{StatusCode: code, Body: b}), b
 }
 
 type fakeCandidate struct {
 	id string
-	fn func(ctx context.Context) (*http.Response, error)
+	fn func(ctx context.Context) (*Result, error)
 }
 
 func (f fakeCandidate) ID() string { return f.id }
 
-func (f fakeCandidate) Attempt(ctx context.Context, _ Request) (*http.Response, error) {
+func (f fakeCandidate) Attempt(ctx context.Context, _ Request) (*Result, error) {
 	return f.fn(ctx)
 }
 
 // answer returns a candidate that responds with code immediately.
 func answer(id string, code int) fakeCandidate {
-	return fakeCandidate{id: id, fn: func(context.Context) (*http.Response, error) {
+	return fakeCandidate{id: id, fn: func(context.Context) (*Result, error) {
 		resp, _ := newResponse(code, "body-"+id)
 		return resp, nil
 	}}
@@ -49,7 +50,7 @@ func answer(id string, code int) fakeCandidate {
 
 // hang returns a candidate that never answers until its context ends.
 func hang(id string) fakeCandidate {
-	return fakeCandidate{id: id, fn: func(ctx context.Context) (*http.Response, error) {
+	return fakeCandidate{id: id, fn: func(ctx context.Context) (*Result, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}}
@@ -57,12 +58,12 @@ func hang(id string) fakeCandidate {
 
 // skipped returns a candidate whose circuit is open.
 func skipped(id string) fakeCandidate {
-	return fakeCandidate{id: id, fn: func(context.Context) (*http.Response, error) {
+	return fakeCandidate{id: id, fn: func(context.Context) (*Result, error) {
 		return nil, ErrSkipped
 	}}
 }
 
-func readBody(t *testing.T, resp *http.Response) string {
+func readBody(t *testing.T, resp *Result) string {
 	t.Helper()
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
@@ -75,7 +76,7 @@ func readBody(t *testing.T, resp *http.Response) string {
 func TestSequentialFailsOverInOrder(t *testing.T) {
 	first, firstBody := newResponse(http.StatusInternalServerError, "boom")
 	cands := []Candidate{
-		fakeCandidate{id: "a", fn: func(context.Context) (*http.Response, error) { return first, nil }},
+		fakeCandidate{id: "a", fn: func(context.Context) (*Result, error) { return first, nil }},
 		answer("b", http.StatusOK),
 	}
 	resp, err := Sequential{}.Execute(t.Context(), Request{}, cands)
@@ -140,7 +141,7 @@ func TestExhaustedWithOnlySkippedCandidates(t *testing.T) {
 func TestHedgedStartsSecondWhenFirstIsSlow(t *testing.T) {
 	firstCancelled := make(chan struct{})
 	cands := []Candidate{
-		fakeCandidate{id: "slow", fn: func(ctx context.Context) (*http.Response, error) {
+		fakeCandidate{id: "slow", fn: func(ctx context.Context) (*Result, error) {
 			<-ctx.Done()
 			close(firstCancelled)
 			return nil, ctx.Err()
@@ -200,9 +201,9 @@ func TestHedgedWinnerBodyStaysReadable(t *testing.T) {
 
 func TestHedgedClosesLateLoserResponses(t *testing.T) {
 	loserBody := &trackingBody{Reader: strings.NewReader("late")}
-	loser := fakeCandidate{id: "late", fn: func(context.Context) (*http.Response, error) {
+	loser := fakeCandidate{id: "late", fn: func(context.Context) (*Result, error) {
 		time.Sleep(60 * time.Millisecond) // ignores cancellation on purpose
-		return &http.Response{StatusCode: http.StatusOK, Body: loserBody}, nil
+		return Stream(&http.Response{StatusCode: http.StatusOK, Body: loserBody}), nil
 	}}
 	resp, err := Hedged{Delay: 5 * time.Millisecond, MaxParallel: 2}.Execute(t.Context(), Request{}, []Candidate{
 		loser,
@@ -246,7 +247,7 @@ func TestHedgedNoCandidates(t *testing.T) {
 func TestHedgedRespectsMaxParallel(t *testing.T) {
 	var started atomic.Int32
 	blocker := func(id string) fakeCandidate {
-		return fakeCandidate{id: id, fn: func(ctx context.Context) (*http.Response, error) {
+		return fakeCandidate{id: id, fn: func(ctx context.Context) (*Result, error) {
 			started.Add(1)
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -272,5 +273,78 @@ func TestExhaustedErrorExplainsEachFailure(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("error %q does not explain %q", msg, want)
 		}
+	}
+}
+
+func TestOnlyVerifiedHandoffsAreAcceptable(t *testing.T) {
+	if Acceptable(Stream(&http.Response{StatusCode: 307, Header: http.Header{"Location": {"https://cdn.example/blob"}}})) {
+		t.Fatal("raw upstream redirects must not bypass verification")
+	}
+	for _, strategy := range []Strategy{Sequential{}, Hedged{Delay: time.Millisecond, MaxParallel: 2}} {
+		cancelled := make(chan struct{})
+		c := fakeCandidate{id: "handoff", fn: func(ctx context.Context) (*Result, error) {
+			go func() { <-ctx.Done(); close(cancelled) }()
+			return BlobRedirect("https://cdn.example/blob"), nil
+		}}
+		ctx, cancel := context.WithCancel(t.Context())
+		resp, err := strategy.Execute(ctx, Request{}, []Candidate{c})
+		if err != nil || resp.RedirectLocation() == "" {
+			cancel()
+			t.Fatalf("verified handoff rejected: %v", err)
+		}
+		resp.Body.Close()
+		if _, ok := strategy.(Hedged); ok {
+			select {
+			case <-cancelled:
+			case <-time.After(time.Second):
+				t.Fatal("handoff left its hedged attempt context alive")
+			}
+		}
+		cancel()
+	}
+}
+
+func TestExhaustedRedactsSignedURL(t *testing.T) {
+	f := newFailure("cdn", nil, &url.Error{Op: "Get", URL: "https://cdn.example/blob?secret=signature", Err: errors.New("connection failed")})
+	msg := (&Exhausted{Failures: []Failure{f}}).Error()
+	if strings.Contains(msg, "signature") || !strings.Contains(msg, "connection failed") {
+		t.Fatalf("unsafe or unhelpful error: %s", msg)
+	}
+}
+
+func TestHedgedHandoffClosesLateStreamLoser(t *testing.T) {
+	started, release, cancelled := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	loserBody := &trackingBody{Reader: strings.NewReader("late")}
+	loser := fakeCandidate{id: "stream", fn: func(ctx context.Context) (*Result, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return Stream(&http.Response{StatusCode: 200, Body: loserBody}), nil
+	}}
+	winner := fakeCandidate{id: "cdn", fn: func(context.Context) (*Result, error) {
+		<-started
+		return BlobRedirect("https://cdn.example/blob"), nil
+	}}
+	resp, err := (Hedged{Delay: time.Millisecond, MaxParallel: 2}).Execute(t.Context(), Request{}, []Candidate{loser, winner})
+	close(release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.RedirectLocation() == "" {
+		t.Fatal("handoff did not win")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("handoff did not cancel losing download")
+	}
+	deadline := time.Now().Add(time.Second)
+	for !loserBody.closed.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !loserBody.closed.Load() {
+		t.Fatal("handoff leaked the late losing stream")
 	}
 }

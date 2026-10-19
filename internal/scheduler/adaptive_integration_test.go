@@ -49,16 +49,20 @@ func TestAdaptiveHTTPFailover(t *testing.T) {
 				io.WriteString(w, data[start:])
 			}))
 			defer server.Close()
-			candidate := rangeCandidate{"alternate", func(ctx context.Context, req Request) (*http.Response, error) {
+			candidate := rangeCandidate{"alternate", func(ctx context.Context, req Request) (*Result, error) {
+				if req.AllowBlobRedirect {
+					t.Error("adaptive probe allowed a redirect into an open download")
+				}
 				r, err := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
 				if err != nil {
 					return nil, err
 				}
 				r.Header = req.Header.Clone()
-				return server.Client().Do(r)
+				resp, err := server.Client().Do(r)
+				return Stream(resp), err
 			}}
 			old := &trackingBody{Reader: strings.NewReader(data[4096:])}
-			b := &adaptiveBody{ctx: t.Context(), req: Request{Kind: ociapi.KindBlob}, candidates: []Candidate{candidate}, policy: Adaptive{ProbeTimeout: time.Second}, body: old, total: int64(len(data)), offset: 4096, current: "original", tried: map[string]bool{}}
+			b := &adaptiveBody{ctx: t.Context(), req: Request{Kind: ociapi.KindBlob, AllowBlobRedirect: true}, candidates: []Candidate{candidate}, policy: Adaptive{ProbeTimeout: time.Second}, body: old, total: int64(len(data)), offset: 4096, current: "original", tried: map[string]bool{}}
 			defer b.Close()
 			b.trySwitch(1)
 			rest, err := io.ReadAll(b)

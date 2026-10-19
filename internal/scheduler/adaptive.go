@@ -24,7 +24,13 @@ type Adaptive struct {
 	Logger            *slog.Logger
 }
 
-func (a Adaptive) Execute(ctx context.Context, req Request, cands []Candidate) (*http.Response, error) {
+func (a Adaptive) Execute(ctx context.Context, req Request, cands []Candidate) (*Result, error) {
+	// Decide ownership before contacting an endpoint. Client ranges cannot be
+	// switched by Adaptive, and a lone candidate offers no alternate to probe.
+	if req.Kind == ociapi.KindBlob && req.Method == http.MethodGet && req.Header.Get("Range") == "" && len(cands) > 1 {
+		req.AllowBlobRedirect = false
+		DebugDelivery(ctx, "relay", "adaptive_ownership")
+	}
 	var selected string
 	tracked := make([]Candidate, len(cands))
 	for i, c := range cands {
@@ -42,8 +48,11 @@ func (a Adaptive) Execute(ctx context.Context, req Request, cands []Candidate) (
 		}
 		t.mu.Unlock()
 	}
-	if req.Kind != ociapi.KindBlob || req.Method != http.MethodGet || req.Header.Get("Range") != "" || resp.StatusCode != http.StatusOK || resp.ContentLength <= 0 || resp.Header.Get("Content-Encoding") != "" {
+	if req.Kind != ociapi.KindBlob || req.Method != http.MethodGet || req.Header.Get("Range") != "" || resp.RedirectLocation() != "" || resp.StatusCode != http.StatusOK || resp.ContentLength <= 0 || resp.Header.Get("Content-Encoding") != "" {
 		return resp, nil
+	}
+	if len(cands) < 2 {
+		return resp, nil // no alternate exists; do not add a pump to a relay fallback
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	resp.Body = &adaptiveBody{ctx: streamCtx, cancel: cancel, req: req, candidates: cands, policy: a, body: resp.Body, total: resp.ContentLength, current: selected, tried: map[string]bool{selected: true}, since: time.Now()}
@@ -54,10 +63,10 @@ func (a Adaptive) Execute(ctx context.Context, req Request, cands []Candidate) (
 type trackedCandidate struct {
 	Candidate
 	mu       sync.Mutex
-	response *http.Response
+	response *Result
 }
 
-func (c *trackedCandidate) Attempt(ctx context.Context, req Request) (*http.Response, error) {
+func (c *trackedCandidate) Attempt(ctx context.Context, req Request) (*Result, error) {
 	r, err := c.Candidate.Attempt(ctx, req)
 	c.mu.Lock()
 	c.response = r
@@ -85,28 +94,31 @@ type adaptiveBody struct {
 }
 
 type readResult struct {
-	data []byte
-	err  error
+	n   int
+	err error
 }
 
-// A pump owns one reusable buffer. It reads only on demand, so downstream
-// backpressure neither grows memory usage nor leaves an unbounded prefetch.
+// A pump reads into a borrowed caller buffer only on demand. Before abandoning
+// a read, Close/adopt must close the underlying body and join done: returning
+// while an old read still writes into that buffer would corrupt a new stream.
+// Downstream backpressure never creates unbounded prefetch or extra copies.
 type bodyPump struct {
-	requests chan int
+	requests chan []byte
 	results  chan readResult
 	stop     chan struct{}
+	done     chan struct{}
 }
 
 func newBodyPump(body io.Reader) *bodyPump {
-	p := &bodyPump{requests: make(chan int), results: make(chan readResult), stop: make(chan struct{})}
+	p := &bodyPump{requests: make(chan []byte), results: make(chan readResult), stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
-		buf := make([]byte, 32*1024)
+		defer close(p.done)
 		for {
 			select {
-			case size := <-p.requests:
-				n, err := body.Read(buf[:min(size, len(buf))])
+			case buf := <-p.requests:
+				n, err := body.Read(buf)
 				select {
-				case p.results <- readResult{buf[:n], err}:
+				case p.results <- readResult{n, err}:
 				case <-p.stop:
 					return
 				}
@@ -130,25 +142,27 @@ func (b *adaptiveBody) Read(p []byte) (int, error) {
 	if b.pump == nil {
 		b.pump = newBodyPump(b.body)
 	}
+	if b.timer == nil {
+		b.timer = time.NewTimer(max(time.Until(b.since.Add(b.policy.Window)), time.Millisecond))
+	}
 	pump := b.pump
+	timer := b.timer
 	b.mu.Unlock()
 	select {
-	case pump.requests <- len(p):
+	case pump.requests <- p:
 	case <-pump.stop:
+		<-pump.done
 		return 0, io.ErrClosedPipe
 	case <-b.ctx.Done():
+		_ = b.Close()
 		return 0, b.ctx.Err()
 	}
-	if b.timer == nil {
-		b.timer = time.NewTimer(time.Hour)
-	}
-	timer := b.timer
-	timer.Reset(max(time.Until(b.since.Add(b.policy.Window)), time.Millisecond))
-	defer timer.Stop()
+	// The window timer survives successful reads. Resetting/stopping it for
+	// every TLS record adds hot-path work without changing the sampling window.
 	for {
 		select {
 		case r := <-pump.results:
-			n := copy(p, r.data)
+			n := r.n
 			b.offset += int64(n)
 			b.windowBytes += int64(n)
 			return n, r.err
@@ -165,9 +179,11 @@ func (b *adaptiveBody) Read(p []byte) (int, error) {
 			b.probe = nil
 			if b.adopt(result) {
 				b.since, b.windowBytes = time.Now(), 0
+				timer.Reset(b.policy.Window)
 				return b.Read(p)
 			}
 		case <-pump.stop:
+			<-pump.done
 			return 0, io.ErrClosedPipe
 		case <-b.ctx.Done():
 			_ = b.Close()
@@ -185,19 +201,26 @@ func (b *adaptiveBody) Close() error {
 	b.closed = true
 	if b.pump != nil {
 		close(b.pump.stop)
-		b.pump = nil
+	}
+	if b.timer != nil {
+		b.timer.Stop()
 	}
 	if b.cancel != nil {
 		b.cancel()
 	}
-	return b.body.Close()
+	err := b.body.Close()
+	if b.pump != nil {
+		<-b.pump.done
+		b.pump = nil
+	}
+	return err
 }
 
 type probeResult struct {
 	id                 string
 	offset             int64
 	sample             []byte
-	resp               *http.Response
+	resp               *Result
 	cancel             context.CancelFunc
 	rate, originalRate float64
 }
@@ -234,6 +257,8 @@ func (b *adaptiveBody) probeCandidates(rate float64, offset int64, candidates []
 			break
 		}
 		req := b.req
+		// Probes supply bytes to an already-open stream, never a client handoff.
+		req.AllowBlobRedirect = false
 		req.Header = b.req.Header.Clone()
 		if req.Header == nil {
 			req.Header = make(http.Header)
@@ -293,20 +318,23 @@ func (b *adaptiveBody) adopt(r probeResult) bool {
 	old := b.body
 	if b.pump != nil {
 		close(b.pump.stop)
+		_ = old.Close()
+		<-b.pump.done // old Read must release the caller's buffer before reuse
 		b.pump = nil
+	} else {
+		_ = old.Close()
 	}
 	b.body = &sampleBody{Reader: io.MultiReader(bytes.NewReader(r.sample[skipped:]), r.resp.Body), closer: r.resp.Body, cancel: r.cancel}
 	if b.policy.Logger != nil {
 		b.policy.Logger.Info("slow blob upstream switched", "from", b.current, "to", r.id, "offset", b.offset, "probe_offset", r.offset, "bytes_per_second", int64(r.originalRate), "probe_bytes_per_second", int64(r.rate))
 	}
 	b.current = r.id
-	_ = old.Close()
 	return true
 }
 
 func (b *adaptiveBody) logProbe(id string, offset int64, reason string, err error) {
 	if b.policy.Logger != nil {
-		b.policy.Logger.Debug("blob alternate rejected", "upstream", id, "offset", offset, "reason", reason, "error", err)
+		b.policy.Logger.Debug("blob alternate rejected", "upstream", id, "offset", offset, "reason", reason, "error", withoutURL(err))
 	}
 }
 

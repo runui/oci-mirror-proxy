@@ -5,7 +5,6 @@ package route
 import (
 	"context"
 	"maps"
-	"net/http"
 	"slices"
 	"sync/atomic"
 
@@ -14,14 +13,14 @@ import (
 
 // Dispatcher serves requests for one registry alias.
 type Dispatcher interface {
-	Dispatch(ctx context.Context, req scheduler.Request) (*http.Response, error)
+	Dispatch(ctx context.Context, req scheduler.Request) (*scheduler.Result, error)
 }
 
 // DispatcherFunc adapts a plain function to the Dispatcher interface.
-type DispatcherFunc func(ctx context.Context, req scheduler.Request) (*http.Response, error)
+type DispatcherFunc func(ctx context.Context, req scheduler.Request) (*scheduler.Result, error)
 
 // Dispatch calls f.
-func (f DispatcherFunc) Dispatch(ctx context.Context, req scheduler.Request) (*http.Response, error) {
+func (f DispatcherFunc) Dispatch(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
 	return f(ctx, req)
 }
 
@@ -48,7 +47,7 @@ type Route struct {
 }
 
 // Dispatch takes a fresh candidate snapshot and runs the strategy over it.
-func (r Route) Dispatch(ctx context.Context, req scheduler.Request) (*http.Response, error) {
+func (r Route) Dispatch(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
 	return r.Strategy.Execute(ctx, req, r.Source.Candidates())
 }
 

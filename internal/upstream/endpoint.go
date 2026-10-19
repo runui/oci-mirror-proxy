@@ -31,6 +31,9 @@ type Endpoint struct {
 	auth    auth.Authorizer
 	breaker *Breaker
 	stats   stats
+	// delegateURL is injectable for local TLS tests; production uses the public
+	// destination checks in publicDownloadURL, never a configurable bypass.
+	delegateURL func(context.Context, *url.URL) bool
 }
 
 type stats struct {
@@ -81,7 +84,7 @@ func (e *Endpoint) Spec() config.Upstream { return e.spec }
 
 // Attempt sends one request to this upstream and feeds the outcome to the breaker.
 // All health logic lives here, so strategies stay unaware of it.
-func (e *Endpoint) Attempt(ctx context.Context, req scheduler.Request) (*http.Response, error) {
+func (e *Endpoint) Attempt(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
 	if !e.breaker.Allow() {
 		return nil, scheduler.ErrSkipped
 	}
@@ -107,7 +110,7 @@ func (e *Endpoint) Attempt(ctx context.Context, req scheduler.Request) (*http.Re
 
 // send applies the overall timeout to metadata requests. Blob transfers are not
 // bounded by it, because a large layer can legitimately take much longer.
-func (e *Endpoint) send(ctx context.Context, req scheduler.Request) (*http.Response, error) {
+func (e *Endpoint) send(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
 	if req.Kind == ociapi.KindBlob || e.spec.Timeouts.Overall <= 0 {
 		return e.roundTrip(ctx, req)
 	}
@@ -122,12 +125,12 @@ func (e *Endpoint) send(ctx context.Context, req scheduler.Request) (*http.Respo
 }
 
 // roundTrip sends the request and answers one authentication challenge, if any.
-func (e *Endpoint) roundTrip(ctx context.Context, req scheduler.Request) (*http.Response, error) {
+func (e *Endpoint) roundTrip(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
 	resp, err := e.do(ctx, req)
 	if err != nil || resp.StatusCode != http.StatusUnauthorized {
 		return resp, err
 	}
-	retry, err := e.auth.Challenge(ctx, resp, req.Repo)
+	retry, err := e.auth.Challenge(ctx, resp.Response, req.Repo)
 	if err != nil {
 		resp.Body.Close()
 		return nil, err
@@ -135,12 +138,13 @@ func (e *Endpoint) roundTrip(ctx context.Context, req scheduler.Request) (*http.
 	if !retry {
 		return resp, nil
 	}
-	// Retry once. A second 401 is returned as-is and counts as a failed attempt.
+	// Retry once. A second 401 fails candidate selection, but is not a breaker
+	// health failure: reachable 4xx responses still mean the upstream is alive.
 	resp.Body.Close()
 	return e.do(ctx, req)
 }
 
-func (e *Endpoint) do(ctx context.Context, req scheduler.Request) (*http.Response, error) {
+func (e *Endpoint) do(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, e.target(req.Path), nil)
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -152,7 +156,11 @@ func (e *Endpoint) do(ctx context.Context, req scheduler.Request) (*http.Respons
 	if err := e.auth.Authorize(ctx, httpReq, req.Repo); err != nil {
 		return nil, fmt.Errorf("authorize: %w", err)
 	}
-	return e.client.Do(httpReq)
+	if req.AllowBlobRedirect && req.Kind == ociapi.KindBlob && req.Method == http.MethodGet {
+		return e.blobRequest(httpReq, req)
+	}
+	resp, err := e.client.Do(httpReq)
+	return scheduler.Stream(resp), err
 }
 
 // target joins the upstream base URL, which may carry a path prefix, with the
