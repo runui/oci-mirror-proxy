@@ -59,6 +59,10 @@ curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.
 `--service` detects running systemd or OpenRC, enables startup at boot, and
 starts (or restarts) the proxy. It initializes `/etc/oci-mirror-proxy/config.yaml`
 only if missing and uses `/run/oci-mirror-proxy/admin.sock` for administration.
+The CLI discovers user configuration first, then the system configuration;
+`admin.socket` is shared by the service and management commands. For example,
+use `sudo oci-mirror-proxy status` without specifying a socket. An explicit
+`--config` selects a configuration and `--admin-socket` overrides its socket.
 Existing custom service definitions are not overwritten. Unsupported init
 systems receive a warning and only the binary is installed. System services
 run as root; do not use a user-writable installation prefix with `--service`.

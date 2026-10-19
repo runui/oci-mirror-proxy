@@ -117,18 +117,49 @@ func parseFlags(fs *flag.FlagSet, args []string) error {
 	return nil
 }
 
-// resolveConfigPath returns the explicit path, or the per-user default.
+// resolveConfigPath prefers user configuration over system configuration.
 func resolveConfigPath(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	return config.DefaultPath()
+	path, err := config.DefaultPath()
+	if err != nil {
+		return "", err
+	}
+	return discoverConfigPath(path, "/etc/oci-mirror-proxy/config.yaml")
 }
 
-// resolveAdminSocket returns the explicit path, or the per-user default.
-func resolveAdminSocket(explicit string) (string, error) {
+func discoverConfigPath(userPath, systemPath string) (string, error) {
+	for _, path := range []string{userPath, systemPath} {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
+	return userPath, nil
+}
+
+// resolveAdminSocket shares the same configuration lookup for clients and serve.
+func resolveAdminSocket(explicit, configPath string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
+	}
+	path, err := resolveConfigPath(configPath)
+	if err != nil {
+		return "", err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		if configPath != "" || !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	} else if cfg.Admin.Socket != "" {
+		return cfg.Admin.Socket, nil
+	}
+	// Older service installs supplied this socket only in the service definition.
+	if path == "/etc/oci-mirror-proxy/config.yaml" {
+		return "/run/oci-mirror-proxy/admin.sock", nil
 	}
 	return config.DefaultAdminSocket()
 }
@@ -146,17 +177,24 @@ func cmdInit(args []string, stderr, stdout io.Writer) error {
 	fs := newFlagSet("init", stderr)
 	configPath := fs.String("config", "", "configuration file to create (default: per-user location)")
 	force := fs.Bool("force", false, "overwrite an existing file")
+	adminSocket := fs.String("admin-socket", "", "admin socket path to write into the configuration")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	path, err := resolveConfigPath(*configPath)
+	path := *configPath
+	var err error
+	if path == "" {
+		path, err = config.DefaultPath()
+	}
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(path); err == nil && !*force {
 		return fmt.Errorf("%s already exists; use --force to overwrite it", path)
 	}
-	if err := config.Save(path, config.Default()); err != nil {
+	cfg := config.Default()
+	cfg.Admin.Socket = *adminSocket
+	if err := config.Save(path, cfg); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "wrote %s\n", path)

@@ -14,8 +14,8 @@ import (
 // SIGHUP re-reads the configuration file; SIGINT or SIGTERM stops the proxy.
 func cmdServe(ctx context.Context, args []string, stderr io.Writer) error {
 	fs := newFlagSet("serve", stderr)
-	configPath := fs.String("config", "", "configuration file (default: per-user location)")
-	adminSocket := fs.String("admin-socket", "", "admin socket path (default: per-user location)")
+	configPath := fs.String("config", "", "configuration file (default: user or system configuration)")
+	adminSocket := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
 	logLevel := fs.String("log-level", "info", "debug, info, warn or error")
 	if err := parseFlags(fs, args); err != nil {
 		return err
@@ -24,7 +24,7 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	socket, err := resolveAdminSocket(*adminSocket)
+	socket, err := resolveAdminSocket(*adminSocket, path)
 	if err != nil {
 		return err
 	}

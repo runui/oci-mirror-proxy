@@ -127,7 +127,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$destination serve --config /etc/oci-mirror-proxy/config.yaml --admin-socket /run/oci-mirror-proxy/admin.sock
+ExecStart=$destination serve --config /etc/oci-mirror-proxy/config.yaml
 Restart=on-failure
 RestartSec=5
 RuntimeDirectory=oci-mirror-proxy
@@ -143,7 +143,7 @@ elif [ "$manager" = openrc ]; then
 # Managed by oci-mirror-proxy install.sh
 description="OCI registry mirror proxy"
 command="$destination"
-command_args="serve --config /etc/oci-mirror-proxy/config.yaml --admin-socket /run/oci-mirror-proxy/admin.sock"
+command_args="serve --config /etc/oci-mirror-proxy/config.yaml"
 command_background=true
 pidfile="/run/oci-mirror-proxy/service.pid"
 output_log="/var/log/oci-mirror-proxy.log"
@@ -163,7 +163,11 @@ if [ -n "$manager" ]; then
     # Preserve custom definitions, including edits to a previously generated file.
     [ ! -L "$service_file" ] || die "refusing to replace service symlink $service_file"
     if [ -e "$service_file" ] && ! cmp -s "$build_dir/service" "$service_file"; then
-        die "$service_file differs from the generated definition; manage this service manually (omit --service)"
+        # Accept the exact previous installer definition, not arbitrary user edits.
+        sed 's|--config /etc/oci-mirror-proxy/config.yaml|--config /etc/oci-mirror-proxy/config.yaml --admin-socket /run/oci-mirror-proxy/admin.sock|' \
+            "$build_dir/service" > "$build_dir/legacy-service"
+        cmp -s "$build_dir/legacy-service" "$service_file" ||
+            die "$service_file differs from the generated definition; manage this service manually (omit --service)"
     fi
 fi
 
@@ -244,7 +248,7 @@ if [ -n "$manager" ]; then
     config=/etc/oci-mirror-proxy/config.yaml
     if [ ! -e "$config" ] && [ ! -L "$config" ]; then
         install -d -m 700 /etc/oci-mirror-proxy
-        "$destination" init --config "$config"
+        "$destination" init --config "$config" --admin-socket /run/oci-mirror-proxy/admin.sock
     fi
     if [ "$manager" = systemd ]; then
         install -m 644 "$build_dir/service" "$service_file"
@@ -263,7 +267,7 @@ if [ -n "$manager" ]; then
         rc-service oci-mirror-proxy status
     fi
     printf 'Service enabled and started (%s). Config: %s\n' "$manager" "$config"
-    printf 'Admin commands: sudo oci-mirror-proxy status --admin-socket /run/oci-mirror-proxy/admin.sock\n'
+    printf 'Admin commands: sudo oci-mirror-proxy status\n'
 elif [ "$update" = true ]; then
     printf 'Configuration preserved. Restart any running proxy service to use the update.\n'
 else

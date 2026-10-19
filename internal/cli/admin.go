@@ -13,11 +13,12 @@ import (
 // cmdStatus prints the health of every upstream of a running proxy.
 func cmdStatus(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("status", stderr)
-	socketFlag := fs.String("admin-socket", "", "admin socket path (default: per-user location)")
+	configPath := fs.String("config", "", "configuration file (default: user or system configuration)")
+	socketFlag := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	socket, err := resolveAdminSocket(*socketFlag)
+	socket, err := resolveAdminSocket(*socketFlag, *configPath)
 	if err != nil {
 		return err
 	}
@@ -44,11 +45,12 @@ func cmdStatus(args []string, stdout, stderr io.Writer) error {
 // cmdReload asks a running proxy to re-read its configuration file.
 func cmdReload(args []string, stderr io.Writer) error {
 	fs := newFlagSet("reload", stderr)
-	socketFlag := fs.String("admin-socket", "", "admin socket path (default: per-user location)")
+	configPath := fs.String("config", "", "configuration file (default: user or system configuration)")
+	socketFlag := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	socket, err := resolveAdminSocket(*socketFlag)
+	socket, err := resolveAdminSocket(*socketFlag, *configPath)
 	if err != nil {
 		return err
 	}
@@ -62,7 +64,8 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 	}
 	action, rest := args[0], args[1:]
 	fs := newFlagSet("upstream "+action, stderr)
-	socketFlag := fs.String("admin-socket", "", "admin socket path (default: per-user location)")
+	configPath := fs.String("config", "", "configuration file (default: user or system configuration)")
+	socketFlag := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
 	registry := fs.String("registry", ociapi.DefaultAlias, "registry alias")
 
 	switch action {
@@ -70,7 +73,7 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 		if err := parseFlags(fs, rest); err != nil {
 			return err
 		}
-		client, err := adminClient(*socketFlag)
+		client, err := adminClient(*socketFlag, *configPath)
 		if err != nil {
 			return err
 		}
@@ -98,7 +101,7 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 		if *id == "" || *url == "" {
 			return fmt.Errorf("%w: --id and --url are required", errUsage)
 		}
-		client, err := adminClient(*socketFlag)
+		client, err := adminClient(*socketFlag, *configPath)
 		if err != nil {
 			return err
 		}
@@ -130,7 +133,7 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 		if *id == "" {
 			return fmt.Errorf("%w: --id is required", errUsage)
 		}
-		client, err := adminClient(*socketFlag)
+		client, err := adminClient(*socketFlag, *configPath)
 		if err != nil {
 			return err
 		}
@@ -151,8 +154,8 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-func adminClient(socketFlag string) (*admin.Client, error) {
-	socket, err := resolveAdminSocket(socketFlag)
+func adminClient(socketFlag, configPath string) (*admin.Client, error) {
+	socket, err := resolveAdminSocket(socketFlag, configPath)
 	if err != nil {
 		return nil, err
 	}
