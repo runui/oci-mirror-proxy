@@ -11,7 +11,7 @@ import (
 )
 
 // LegacyRenderer edits daemon.json. The legacy store accepts a mirror list for
-// docker.io only, so other registries are rejected instead of being silently ignored.
+// docker.io only, so other registries are skipped with warnings.
 type LegacyRenderer struct {
 	DaemonJSON string
 }
@@ -24,10 +24,18 @@ func (r LegacyRenderer) Render(t Target, read ReadFunc) (Plan, error) {
 	if len(t.Routes) == 0 {
 		return Plan{}, ErrNoRoutes
 	}
+	plan := Plan{Store: StoreLegacy}
+	hasDockerHub := false
 	for _, rt := range t.Routes {
 		if rt.Alias != ociapi.DefaultAlias {
-			return Plan{}, fmt.Errorf("the legacy image store can only mirror %s; registry %s needs the containerd image store", ociapi.DefaultAlias, rt.Alias)
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("legacy image store only supports %s mirrors; skipping %s (requires the containerd image store)", ociapi.DefaultAlias, rt.Alias))
+		} else {
+			hasDockerHub = true
 		}
+	}
+	if !hasDockerHub {
+		plan.Notes = append(plan.Notes, "no supported registries to configure; nothing to apply")
+		return plan, nil
 	}
 
 	existing, err := read(r.DaemonJSON)
@@ -60,12 +68,10 @@ func (r LegacyRenderer) Render(t Target, read ReadFunc) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	return Plan{
-		Store:       StoreLegacy,
-		Files:       []File{{Path: r.DaemonJSON, Content: content, Mode: 0o644}},
-		NeedsReload: true,
-		Notes:       []string{"dockerd must be reloaded (SIGHUP) for registry-mirrors to take effect"},
-	}, nil
+	plan.Files = []File{{Path: r.DaemonJSON, Content: content, Mode: 0o644}}
+	plan.NeedsReload = true
+	plan.Notes = []string{"dockerd must be reloaded (SIGHUP) for registry-mirrors to take effect"}
+	return plan, nil
 }
 
 // decodeDaemonConfig parses daemon.json as a generic object, so unknown keys survive.

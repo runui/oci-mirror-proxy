@@ -3,6 +3,7 @@ package daemonconf
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
@@ -137,10 +138,46 @@ func TestLegacyRenderPreservesOtherKeysAndMirrors(t *testing.T) {
 	}
 }
 
-func TestLegacyRenderRejectsOtherRegistries(t *testing.T) {
-	target := Target{ProxyURL: proxyURL, Routes: []Route{{Alias: "ghcr.io", Origin: "https://ghcr.io"}}}
-	if _, err := (LegacyRenderer{DaemonJSON: "x"}).Render(target, noFile); err == nil {
-		t.Fatal("legacy store must refuse non-docker.io registries")
+func TestLegacyRenderSkipsOtherRegistries(t *testing.T) {
+	for _, withHub := range []bool{false, true} {
+		t.Run(fmt.Sprint(withHub), func(t *testing.T) {
+			target := Target{ProxyURL: proxyURL, Routes: []Route{
+				{Alias: "gcr.io", Origin: "https://gcr.io"},
+				{Alias: "ghcr.io", Origin: "https://ghcr.io"},
+			}}
+			if withHub {
+				target.Routes = append(target.Routes, dockerHubTarget().Routes...)
+			}
+			read := func(path string) ([]byte, error) {
+				if !withHub {
+					t.Fatal("unsupported-only target must not read daemon.json")
+				}
+				return noFile(path)
+			}
+			plan, err := (LegacyRenderer{DaemonJSON: "daemon.json"}).Render(target, read)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Store != StoreLegacy || plan.NeedsReload != withHub {
+				t.Fatalf("unexpected plan: %+v", plan)
+			}
+			if len(plan.Warnings) != 2 || !strings.Contains(plan.Warnings[0], "skipping gcr.io") || !strings.Contains(plan.Warnings[1], "skipping ghcr.io") {
+				t.Fatalf("warnings = %v", plan.Warnings)
+			}
+			if withHub {
+				if len(plan.Files) != 1 || !strings.Contains(string(plan.Files[0].Content), proxyURL) {
+					t.Fatalf("Docker Hub mirror not configured: %+v", plan.Files)
+				}
+			} else if len(plan.Files) != 0 || len(plan.Notes) == 0 {
+				t.Fatalf("expected no-op plan with explanation: %+v", plan)
+			}
+		})
+	}
+}
+
+func TestLegacyRenderRejectsEmptyTarget(t *testing.T) {
+	if _, err := (LegacyRenderer{}).Render(Target{}, nil); !errors.Is(err, ErrNoRoutes) {
+		t.Fatalf("error = %v, want ErrNoRoutes", err)
 	}
 }
 

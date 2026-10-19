@@ -37,6 +37,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if store, err := storeForDoctor(flags.store, info, infoErr); err == nil {
 		if plan, err := renderer(store, paths).Render(targetFor(cfg), os.ReadFile); err == nil {
 			expected = plan.Files
+			printWarnings(stderr, plan)
 		}
 	}
 

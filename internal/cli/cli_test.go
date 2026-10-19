@@ -94,16 +94,87 @@ func TestDockerdPlanContainerdWritesNothing(t *testing.T) {
 	}
 }
 
-func TestDockerdPlanLegacyRejectsOtherRegistries(t *testing.T) {
+func TestDockerdPlanLegacyWarnsAboutOtherRegistries(t *testing.T) {
 	cfg := config.Default()
 	cfg.Registries["ghcr.io"] = config.Registry{}
 	cfg.ApplyDefaults()
 	path := writeConfig(t, cfg)
 
-	code, _, errOut := run(t, "dockerd", "plan", "--config", path, "--store", "legacy",
+	code, out, errOut := run(t, "dockerd", "plan", "--config", path, "--store", "legacy",
 		"--daemon-json", filepath.Join(t.TempDir(), "daemon.json"))
-	if code != 1 || !strings.Contains(errOut, "legacy image store can only mirror") {
+	if code != 0 || !strings.Contains(errOut, "warning:") || !strings.Contains(errOut, "skipping ghcr.io") {
 		t.Fatalf("code = %d, stderr = %q", code, errOut)
+	}
+	if !strings.Contains(out, "registry-mirrors") || !strings.Contains(out, cfg.ProxyURL()) {
+		t.Fatalf("missing Docker Hub mirror: %s", out)
+	}
+}
+
+func TestDockerdApplyLegacyWarnsAndStillConfiguresDockerHub(t *testing.T) {
+	root := t.TempDir()
+	daemon := filepath.Join(root, "daemon.json")
+	cfg := config.Default()
+	cfg.Registries["gcr.io"] = config.Registry{}
+	cfg.ApplyDefaults()
+	path := writeConfig(t, cfg)
+	args := []string{"--config", path, "--store", "legacy", "--daemon-json", daemon,
+		"--state-dir", filepath.Join(root, "state"), "--no-reload"}
+	code, out, errOut := run(t, append([]string{"dockerd", "apply"}, args...)...)
+	if code != 0 || !strings.Contains(errOut, "warning:") || !strings.Contains(errOut, "skipping gcr.io") {
+		t.Fatalf("code = %d, stdout = %q, stderr = %q", code, out, errOut)
+	}
+	data, err := os.ReadFile(daemon)
+	if err != nil || !strings.Contains(string(data), cfg.ProxyURL()) {
+		t.Fatalf("Docker Hub mirror not applied: %s, %v", data, err)
+	}
+	if code, _, errOut := run(t, append([]string{"dockerd", "revert"}, args...)...); code != 0 {
+		t.Fatalf("revert: code = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestDockerdLegacyUnsupportedOnlyIsNoOp(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fresh", true: "existing"}[existing], func(t *testing.T) {
+			root := t.TempDir()
+			daemon := filepath.Join(root, "daemon.json")
+			state := filepath.Join(root, "state", "dockerd-state.json")
+			original := []byte("unchanged")
+			if existing {
+				if err := os.MkdirAll(filepath.Dir(state), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				for _, file := range []string{daemon, state} {
+					if err := os.WriteFile(file, original, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			cfg := config.Default()
+			delete(cfg.Registries, "docker.io")
+			cfg.Registries["gcr.io"] = config.Registry{}
+			cfg.ApplyDefaults()
+			path := writeConfig(t, cfg)
+			for _, action := range []string{"plan", "apply"} {
+				args := []string{"dockerd", action, "--config", path, "--store", "legacy", "--daemon-json", daemon}
+				if action == "apply" {
+					args = append(args, "--state-dir", filepath.Dir(state))
+				}
+				code, out, errOut := run(t, args...)
+				if code != 0 || !strings.Contains(errOut, "warning:") || !strings.Contains(errOut, "skipping gcr.io") || !strings.Contains(out, "nothing to apply") {
+					t.Fatalf("%s: code = %d, stdout = %q, stderr = %q", action, code, out, errOut)
+				}
+				for _, file := range []string{daemon, state} {
+					data, err := os.ReadFile(file)
+					if existing {
+						if err != nil || !bytes.Equal(data, original) {
+							t.Fatalf("%s changed: %q, %v", file, data, err)
+						}
+					} else if !os.IsNotExist(err) {
+						t.Fatalf("%s must not be created: %v", file, err)
+					}
+				}
+			}
+		})
 	}
 }
 

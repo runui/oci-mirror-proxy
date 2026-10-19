@@ -145,12 +145,18 @@ func cmdDockerd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 			return err
 		}
 		printPlan(stdout, plan)
+		printWarnings(stderr, plan)
 		return nil
 
 	case "apply":
 		plan, err := buildPlan(ctx, &flags, paths)
 		if err != nil {
 			return err
+		}
+		printWarnings(stderr, plan)
+		if len(plan.Files) == 0 {
+			printPlan(stdout, plan)
+			return nil
 		}
 		st, err := applier.Apply(plan, flags.force)
 		if err != nil {
@@ -248,5 +254,11 @@ func printPlan(w io.Writer, plan daemonconf.Plan) {
 	}
 	for _, note := range plan.Notes {
 		fmt.Fprintln(w, "\nnote:", note)
+	}
+}
+
+func printWarnings(w io.Writer, plan daemonconf.Plan) {
+	for _, warning := range plan.Warnings {
+		fmt.Fprintln(w, "warning:", warning)
 	}
 }

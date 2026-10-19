@@ -64,8 +64,11 @@ gets `[host."http://127.0.0.1:24817/ghcr.io"]`.
 
 **Legacy store**: `daemon.json` gets the proxy as the first entry in
 `registry-mirrors`. Other entries stay as fallbacks, and all other keys are preserved.
-The legacy store supports mirrors for `docker.io` only, so `plan` and `apply` refuse
-other registries when the legacy store is in use.
+The legacy store supports mirrors for `docker.io` only. `plan`, `apply`, and
+`doctor` warn about other registries and skip their dockerd mirror configuration;
+the proxy's own routes are unchanged. Docker Hub configuration still proceeds.
+If no supported registries are configured, `plan` and `apply` succeed without
+writing files, changing existing apply state, or signalling dockerd.
 
 ### Reverting
 

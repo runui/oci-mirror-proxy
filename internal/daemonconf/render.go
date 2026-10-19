@@ -49,6 +49,7 @@ type Plan struct {
 	Files       []File
 	NeedsReload bool     // dockerd must re-read its configuration
 	Notes       []string // remarks shown to the operator
+	Warnings    []string // unsupported configuration skipped by the renderer
 }
 
 // ReadFunc reads the current content of a file. A missing file must return an
