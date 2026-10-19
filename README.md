@@ -34,20 +34,37 @@ point exists in `internal/cache`), keychain secret backends, and metrics export.
 
 ## Installation
 
-From a source checkout, build and install without changing Docker settings:
+Install the latest release without cloning the repository:
 
 ```sh
-./install.sh --prefix "$HOME/.local"  # installs ~/.local/bin/oci-mirror-proxy
+curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- --prefix "$HOME/.local"
 export PATH="$HOME/.local/bin:$PATH"
 oci-mirror-proxy version
 ```
 
-The script requires Go 1.26.8 or newer (or Go toolchain auto-download). It can
-run from any working directory and leaves existing configuration untouched.
-The default prefix is `/usr/local`; installing there requires write permission.
-Use `--version v1.0.0` (or `VERSION=v1.0.0`) to embed a release version, and
-`./install.sh --help` for all options. Re-running it replaces the installed binary.
-It does not initialize configuration, install a service, or restart Docker.
+Update an existing installation:
+
+```sh
+curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- --update --prefix "$HOME/.local"
+```
+
+The script downloads the matching Linux `amd64` or `arm64` binary and verifies
+its SHA256 checksum. When no matching binary is available, or `--build` is
+specified, it builds release source using Go 1.26.8 or newer (or Go toolchain
+auto-download). Use `--version v1.0.1` to select a release.
+To use a mirror, set `DOWNLOAD_BASE_URL` to its repository root URL (with the
+same `/releases` and `/archive` layout). When piping the script, pass the variable
+to `sh`, not just to `curl`:
+
+```sh
+curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/bin/oci-mirror-proxy sh -s -- --prefix "$HOME/.local"
+```
+
+Latest-version detection follows `/releases/latest` redirects without using the
+Gitea API. For a mirror without that redirect, specify `--version` or `VERSION`.
+The default prefix is `/usr/local`, which requires write permission. Existing
+configuration is preserved; the script does not initialize configuration,
+install a service, or restart Docker. Restart a running proxy after updating.
 
 ## Quick start
 
