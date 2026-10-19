@@ -160,6 +160,9 @@ func (s *Service) dispatcher(reg config.Registry, pool *upstream.Pool) route.Dis
 	if reg.Race.Enabled {
 		strategy = scheduler.Hedged{Delay: reg.Race.Delay, MaxParallel: reg.Race.MaxParallel}
 	}
+	if reg.Adaptive.Enabled {
+		strategy = scheduler.Adaptive{Base: strategy, Window: reg.Adaptive.Window, MinBytesPerSecond: reg.Adaptive.MinBytesPerSecond, ProbeTimeout: reg.Adaptive.ProbeTimeout, MaxSwitches: reg.Adaptive.MaxSwitches, Logger: s.logger}
+	}
 	return route.Chain(route.Route{Source: pool, Strategy: strategy}, s.middle...)
 }
 

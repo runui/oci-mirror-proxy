@@ -35,6 +35,15 @@ registries:
       threshold: 3        # consecutive failures before an upstream is skipped
       cooldown: 30s       # how long a skipped upstream is left alone
 
+    # Experimental. Probe alternate Range-capable sources during slow blob reads.
+    # Background probes sample up to 512 KiB and must be at least 25% faster.
+    adaptive:
+      enabled: false
+      window: 10s
+      min_bytes_per_second: 262144
+      probe_timeout: 5s
+      max_switches: 3      # maximum slow-window probe rounds per response
+
     upstreams:
       # Tried first.
       - id: mirror-a

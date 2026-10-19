@@ -65,7 +65,17 @@ type Registry struct {
 	Origin    string     `yaml:"origin,omitempty"`
 	Race      Race       `yaml:"race"`
 	Breaker   Breaker    `yaml:"breaker"`
+	Adaptive  Adaptive   `yaml:"adaptive,omitempty"`
 	Upstreams []Upstream `yaml:"upstreams"`
+}
+
+// Adaptive enables experimental throughput-aware blob failover.
+type Adaptive struct {
+	Enabled           bool          `yaml:"enabled"`
+	Window            time.Duration `yaml:"window"`
+	MinBytesPerSecond int64         `yaml:"min_bytes_per_second"`
+	ProbeTimeout      time.Duration `yaml:"probe_timeout"`
+	MaxSwitches       int           `yaml:"max_switches"`
 }
 
 // Race controls hedged requests for a registry.
@@ -141,6 +151,18 @@ func (c *Config) ApplyDefaults() {
 }
 
 func (r *Registry) applyDefaults(alias string) {
+	if r.Adaptive.Window == 0 {
+		r.Adaptive.Window = 10 * time.Second
+	}
+	if r.Adaptive.MinBytesPerSecond == 0 {
+		r.Adaptive.MinBytesPerSecond = 256 * 1024
+	}
+	if r.Adaptive.ProbeTimeout == 0 {
+		r.Adaptive.ProbeTimeout = 5 * time.Second
+	}
+	if r.Adaptive.MaxSwitches == 0 {
+		r.Adaptive.MaxSwitches = 3
+	}
 	if r.Origin == "" {
 		r.Origin = defaultOrigin(alias)
 	}
@@ -242,6 +264,9 @@ func (c Config) Clone() Config {
 func validateRegistry(alias string, r Registry) error {
 	var errs []error
 	wrap := func(err error) error { return fmt.Errorf("registry %s: %w", alias, err) }
+	if r.Adaptive.Enabled && (r.Adaptive.Window <= 0 || r.Adaptive.MinBytesPerSecond <= 0 || r.Adaptive.ProbeTimeout <= 0 || r.Adaptive.MaxSwitches < 1) {
+		errs = append(errs, wrap(errors.New("adaptive window, min_bytes_per_second, probe_timeout and max_switches must be positive")))
+	}
 
 	if !ociapi.ValidAlias(alias) {
 		errs = append(errs, wrap(fmt.Errorf("alias must be a host-like name without a port, and not %q", "v2")))
