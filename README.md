@@ -32,6 +32,23 @@ point exists in `internal/cache`), keychain secret backends, and metrics export.
   reachable from its network namespace, which is left to the operator (see
   [docs/operations.md](docs/operations.md#rootless-dockerd)).
 
+## Installation
+
+From a source checkout, build and install without changing Docker settings:
+
+```sh
+./install.sh --prefix "$HOME/.local"  # installs ~/.local/bin/oci-mirror-proxy
+export PATH="$HOME/.local/bin:$PATH"
+oci-mirror-proxy version
+```
+
+The script requires Go 1.26.8 or newer (or Go toolchain auto-download). It can
+run from any working directory and leaves existing configuration untouched.
+The default prefix is `/usr/local`; installing there requires write permission.
+Use `--version v1.0.0` (or `VERSION=v1.0.0`) to embed a release version, and
+`./install.sh --help` for all options. Re-running it replaces the installed binary.
+It does not initialize configuration, install a service, or restart Docker.
+
 ## Quick start
 
 ```sh

@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container:
+      image: golang:1.26.8-bookworm
+    steps:
+      - name: Check out source
+        uses: https://github.com/actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install release tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl jq
+
+      - name: Test
+        run: go test -count=1 ./...
+
+      - name: Build release archives
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          # Restrict version labels before passing them to the Go linker.
+          case "$RELEASE_TAG" in
+            v*[!a-zA-Z0-9._+-]*|'') echo 'Invalid release tag' >&2; exit 1 ;;
+            v*) ;;
+            *) echo 'Release tags must start with v' >&2; exit 1 ;;
+          esac
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            stage="dist/linux-$arch"
+            mkdir -p "$stage"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version=$RELEASE_TAG" \
+              -o "$stage/oci-mirror-proxy" ./cmd/oci-mirror-proxy
+            cp README.md "$stage/"
+            cp examples/config.example.yaml "$stage/"
+            tar -czf "dist/oci-mirror-proxy_${RELEASE_TAG}_linux_${arch}.tar.gz" -C "$stage" .
+          done
+          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
+
+      - name: Publish Gitea release
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          [ -n "$RELEASE_TOKEN" ] || { echo 'Set the RELEASE_TOKEN repository secret first' >&2; exit 1; }
+          api="${SERVER_URL%/}/api/v1/repos/$REPOSITORY"
+          tag=$(printf '%s' "$RELEASE_TAG" | jq -sRr @uri)
+          status=$(curl --silent --show-error --output dist/release.json --write-out '%{http_code}' \
+            --header "Authorization: token $RELEASE_TOKEN" "$api/releases/tags/$tag")
+          case "$status" in
+            200) ;;
+            404)
+              jq -n --arg tag "$RELEASE_TAG" \
+                '{tag_name: $tag, name: $tag, body: "Linux amd64 and arm64 binaries. Verify downloads with SHA256SUMS.", draft: false, prerelease: ($tag | test("-"))}' \
+                > dist/release-request.json
+              curl --fail-with-body --silent --show-error \
+                --header "Authorization: token $RELEASE_TOKEN" \
+                --header 'Content-Type: application/json' \
+                --data-binary @dist/release-request.json \
+                "$api/releases" > dist/release.json
+              ;;
+            *) echo "Could not look up release (HTTP $status)" >&2; exit 1 ;;
+          esac
+          release_id=$(jq -er '.id | numbers' dist/release.json)
+          for asset in dist/*.tar.gz dist/SHA256SUMS; do
+            name=$(basename "$asset")
+            # Replace only our named assets, so rerunning a release job is safe.
+            curl --fail-with-body --silent --show-error \
+              --header "Authorization: token $RELEASE_TOKEN" \
+              "$api/releases/$release_id/assets" > dist/assets.json
+            jq -r --arg name "$name" '.[] | select(.name == $name) | .id' dist/assets.json > dist/replace-ids
+            while IFS= read -r asset_id; do
+              curl --fail-with-body --silent --show-error --request DELETE \
+                --header "Authorization: token $RELEASE_TOKEN" \
+                "$api/releases/$release_id/assets/$asset_id"
+            done < dist/replace-ids
+            curl --fail-with-body --silent --show-error \
+              --header "Authorization: token $RELEASE_TOKEN" \
+              --form "attachment=@$asset" \
+              "$api/releases/$release_id/assets?name=$name" > /dev/null
+          done
