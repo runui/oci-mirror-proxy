@@ -11,15 +11,15 @@ jobs:
     container:
       image: golang:1.26.8-bookworm
     steps:
+      - name: Install CI tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl jq git nodejs
+
       - name: Check out source
         uses: https://github.com/actions/checkout@v4
         with:
           persist-credentials: false
-
-      - name: Install release tools
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl jq
 
       - name: Test
         run: go test -count=1 ./...
