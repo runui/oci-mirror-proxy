@@ -5,13 +5,14 @@ usage() {
     cat <<'EOF'
 Install or update oci-mirror-proxy from https://git.zmide.com/bin/oci-mirror-proxy.
 
-Usage: ./install.sh [--prefix DIR] [--version TAG] [--build] [--update]
+Usage: ./install.sh [--prefix DIR] [--version TAG] [--build] [--update] [--service]
 
 Options:
   --prefix DIR   Install into DIR/bin (default: /usr/local).
   --version TAG  Install this release tag (default: VERSION environment or latest).
   --build        Compile release source instead of downloading a binary.
   --update       Replace the binary found in PATH, unless --prefix is supplied.
+  --service      Install and start a systemd/OpenRC system service (requires root).
   -h, --help     Show this help.
 
 Environment:
@@ -23,7 +24,7 @@ Detects the current OS and architecture and verifies release SHA256 checksums.
 Falls back to building release source when no matching binary is published.
 Source builds require Go 1.26.8 or newer (or Go toolchain auto-download).
 Requires curl, tar and write access to the destination; never invokes sudo.
-Configuration is preserved and running services are not restarted.
+Configuration is preserved; services are only restarted with --service.
 EOF
 }
 
@@ -43,6 +44,7 @@ explicit_prefix=false
 version=${VERSION:-latest}
 build=false
 update=false
+service=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --prefix|--version)
@@ -55,6 +57,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         --build) build=true; shift ;;
         --update) update=true; shift ;;
+        --service) service=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -86,6 +89,25 @@ fi
 destination="$bin_dir/oci-mirror-proxy"
 [ ! -L "$destination" ] || die "refusing to replace symlink $destination; specify the real installation prefix"
 
+manager=
+if [ "$service" = true ]; then
+    [ "$(uname -s)" = Linux ] || die '--service requires Linux'
+    [ "$(id -u)" -eq 0 ] || die '--service requires root; rerun as root (sudo is not invoked automatically)'
+    # Service definitions interpret paths themselves; only accept literal safe paths.
+    case "$destination" in
+        *[!a-zA-Z0-9/._+-]*) die '--service requires an installation path without spaces or special characters' ;;
+    esac
+    if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+        manager=systemd
+        service_file=/etc/systemd/system/oci-mirror-proxy.service
+    elif [ -d /run/openrc ] && command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
+        manager=openrc
+        service_file=/etc/init.d/oci-mirror-proxy
+    else
+        printf 'Warning: no running systemd or OpenRC detected; installing binary only.\n' >&2
+    fi
+fi
+
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/oci-mirror-proxy-install.XXXXXXXX")
 staged_binary=
 cleanup() {
@@ -94,6 +116,56 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
+
+if [ "$manager" = systemd ]; then
+    cat > "$build_dir/service" <<EOF
+# Managed by oci-mirror-proxy install.sh
+[Unit]
+Description=OCI registry mirror proxy
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$destination serve --config /etc/oci-mirror-proxy/config.yaml --admin-socket /run/oci-mirror-proxy/admin.sock
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=oci-mirror-proxy
+RuntimeDirectoryMode=0700
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+EOF
+elif [ "$manager" = openrc ]; then
+    cat > "$build_dir/service" <<EOF
+#!/sbin/openrc-run
+# Managed by oci-mirror-proxy install.sh
+description="OCI registry mirror proxy"
+command="$destination"
+command_args="serve --config /etc/oci-mirror-proxy/config.yaml --admin-socket /run/oci-mirror-proxy/admin.sock"
+command_background=true
+pidfile="/run/oci-mirror-proxy/service.pid"
+output_log="/var/log/oci-mirror-proxy.log"
+error_log="/var/log/oci-mirror-proxy.log"
+umask=0077
+
+depend() {
+    need net
+}
+
+start_pre() {
+    checkpath --directory --mode 0700 --owner root:root /run/oci-mirror-proxy
+}
+EOF
+fi
+if [ -n "$manager" ]; then
+    # Preserve custom definitions, including edits to a previously generated file.
+    [ ! -L "$service_file" ] || die "refusing to replace service symlink $service_file"
+    if [ -e "$service_file" ] && ! cmp -s "$build_dir/service" "$service_file"; then
+        die "$service_file differs from the generated definition; manage this service manually (omit --service)"
+    fi
+fi
 
 if [ "$version" = latest ]; then
     release_url=$(curl --fail --silent --show-error --location --output /dev/null \
@@ -168,7 +240,31 @@ install -m 755 "$build_dir/oci-mirror-proxy" "$staged_binary"
 mv -f "$staged_binary" "$destination"
 staged_binary=
 printf 'Installed %s (%s)\n' "$destination" "$version"
-if [ "$update" = true ]; then
+if [ -n "$manager" ]; then
+    config=/etc/oci-mirror-proxy/config.yaml
+    if [ ! -e "$config" ] && [ ! -L "$config" ]; then
+        install -d -m 700 /etc/oci-mirror-proxy
+        "$destination" init --config "$config"
+    fi
+    if [ "$manager" = systemd ]; then
+        install -m 644 "$build_dir/service" "$service_file"
+        systemctl daemon-reload
+        systemctl enable oci-mirror-proxy.service
+        systemctl restart oci-mirror-proxy.service
+        systemctl is-active --quiet oci-mirror-proxy.service
+    else
+        install -m 755 "$build_dir/service" "$service_file"
+        rc-update add oci-mirror-proxy default
+        if rc-service oci-mirror-proxy status >/dev/null 2>&1; then
+            rc-service oci-mirror-proxy restart
+        else
+            rc-service oci-mirror-proxy start
+        fi
+        rc-service oci-mirror-proxy status
+    fi
+    printf 'Service enabled and started (%s). Config: %s\n' "$manager" "$config"
+    printf 'Admin commands: sudo oci-mirror-proxy status --admin-socket /run/oci-mirror-proxy/admin.sock\n'
+elif [ "$update" = true ]; then
     printf 'Configuration preserved. Restart any running proxy service to use the update.\n'
 else
     printf '\nAdd the installation directory to PATH, then run:\n'
