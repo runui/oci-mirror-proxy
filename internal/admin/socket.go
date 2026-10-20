@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -106,7 +107,7 @@ func upstreamsPath(alias string) string {
 }
 
 func upstreamPath(alias, id string) string {
-	return upstreamsPath(alias) + "/" + id
+	return upstreamsPath(alias) + "/" + url.PathEscape(id)
 }
 
 func (c *Client) do(method, path string, in, out any) error {

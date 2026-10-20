@@ -10,10 +10,29 @@ import (
 	"path/filepath"
 )
 
+// DurabilityError means the change is already visible to readers, but syncing
+// its directory failed. Callers must not treat it as a pre-publication failure:
+// a retry, rollback, or reload must account for the changed path on disk.
+type DurabilityError struct {
+	Path string
+	Err  error
+}
+
+func (e *DurabilityError) Error() string {
+	return fmt.Sprintf("%s changed, but directory durability is unconfirmed: %v", e.Path, e.Err)
+}
+
+func (e *DurabilityError) Unwrap() error { return e.Err }
+
 // WriteFileAtomic replaces path with data. The content is written to a temporary
 // file in the same directory, synced, and renamed over the target, so readers
-// observe either the old file or the new one, never a partial write.
+// observe either the old file or the new one, never a partial write. A directory
+// sync failure after rename returns *DurabilityError, not an unchanged-file claim.
 func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error {
+	return writeFileAtomic(path, data, perm, syncDirectory)
+}
+
+func writeFileAtomic(path string, data []byte, perm fs.FileMode, syncDir func(string) error) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create directory %s: %w", dir, err)
@@ -32,7 +51,37 @@ func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("replace %s: %w", path, err)
 	}
+	// Persist the directory entry as well as file contents. A completed rename
+	// is atomic to readers; syncing its directory also makes it crash-durable.
+	if err := syncDir(dir); err != nil {
+		return &DurabilityError{Path: path, Err: err}
+	}
 	return nil
+}
+
+// RemoveFile unlinks path and syncs its containing directory. As with atomic
+// replacement, a sync failure is reported separately from an unlink failure.
+func RemoveFile(path string) error {
+	return removeFile(path, syncDirectory)
+}
+
+func removeFile(path string, syncDir func(string) error) error {
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return &DurabilityError{Path: path, Err: err}
+	}
+	return nil
+}
+
+func syncDirectory(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open directory for sync: %w", err)
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 func writeAndSync(f *os.File, data []byte, perm fs.FileMode) error {

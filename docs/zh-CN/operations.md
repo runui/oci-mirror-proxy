@@ -4,6 +4,11 @@
 
 ## 命令
 
+远端源使用 `remote list`、`remote update [--url U] --region cn`、
+`remote update --all`、`remote remove --url U` 管理；支持 `--dry-run` 和上一次结果备份，
+详见[远端订阅](remotes.md)。`upstream add` 无需 `--id`，启用/禁用/删除可用 `--url`
+代替旧标签。重载不打断正在传输的 HTTP 请求。
+
 | 命令 | 用途 |
 |---|---|
 | `init [--config F] [--force]` | 写入默认配置文件。 |
@@ -30,7 +35,7 @@
 | `--certs-dir` | `/etc/docker/certs.d` | `$XDG_CONFIG_HOME/docker/certs.d` |
 | `--daemon-json` | `/etc/docker/daemon.json` | `$XDG_CONFIG_HOME/docker/daemon.json` |
 | `--docker-socket` | `/var/run/docker.sock` | `$XDG_RUNTIME_DIR/docker.sock` |
-| `--pid-file` | `/var/run/docker.pid` | `$XDG_RUNTIME_DIR/docker.pid`（假定路径，见下文） |
+| `--pid-file` | `/var/run/docker.pid` | `$XDG_RUNTIME_DIR/docker.pid` |
 | `--state-dir` | `/var/lib/oci-mirror-proxy` | `$XDG_STATE_HOME/oci-mirror-proxy` |
 
 `--store auto` 会向运行中的 dockerd 查询所用镜像存储后端。dockerd 未运行时，请传入 `--store containerd` 或 `--store legacy`。
@@ -82,7 +87,7 @@ containerd 先尝试 `[host]` 条目，最后尝试 `server`，因此官方仓�
 - 保留默认的回环访问限制，将 `advertise` 指向 rootless dockerd 可达的地址，并确保 `listen` 绑定到该地址。
 - 在 dockerd 服务覆盖配置中设置 `DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`。这会允许 rootless dockerd 访问宿主机回环服务，需要明确接受相应的安全权衡。
 
-rootless 的 `daemon.json` 路径（`$XDG_CONFIG_HOME/docker/daemon.json`）和 PID 文件路径（`$XDG_RUNTIME_DIR/docker.pid`）是基于假设的默认值。前者已对照 moby 源码检查。如果实际安装不同，请传入 `--pid-file`。
+rootless 默认使用 `$XDG_CONFIG_HOME/docker/daemon.json` 和 `$XDG_RUNTIME_DIR/docker.pid`。如果实际安装使用不同路径，请传入 `--daemon-json` 或 `--pid-file`。
 
 ## 日志
 

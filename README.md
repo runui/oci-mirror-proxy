@@ -20,12 +20,11 @@ graphdriver store (`daemon.json`, docker.io only).
 
 ## Status
 
-Implemented and tested: the registry API for pulls, failover, circuit breaking,
+Supported features: the registry API for pulls, failover, circuit breaking,
 hedged requests, blob resumption, token and basic authentication, the admin socket,
 configuration reload, and dockerd setup with revert.
 
-Not implemented (by design, for now): push, a local blob cache (the extension
-point exists in `internal/cache`), keychain secret backends, and metrics export.
+Not supported: push, a local blob cache, keychain secret backends, and metrics export.
 
 ## Requirements
 
@@ -36,10 +35,11 @@ point exists in `internal/cache`), keychain secret backends, and metrics export.
 
 ## Installation
 
-Install the latest release without cloning the repository:
+Install the latest release from [GitHub](https://github.com/runui/oci-mirror-proxy)
+without cloning the repository:
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- --prefix "$HOME/.local"
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --prefix "$HOME/.local"
 export PATH="$HOME/.local/bin:$PATH"
 oci-mirror-proxy version
 ```
@@ -47,15 +47,15 @@ oci-mirror-proxy version
 Update an existing installation:
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- --update --prefix "$HOME/.local"
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --update --prefix "$HOME/.local"
 ```
 
 On Linux, install and start a system service with root privileges:
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- --service
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --service
 # Update the system installation and restart its service:
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- --update --prefix /usr/local --service
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --update --prefix /usr/local --service
 ```
 
 The script downloads the matching Linux `amd64` or `arm64` binary and verifies
@@ -67,7 +67,7 @@ same `/releases` and `/archive` layout). When piping the script, pass the variab
 to `sh`, not just to `curl`:
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/bin/oci-mirror-proxy sh -s -- --prefix "$HOME/.local"
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/runui/oci-mirror-proxy sh -s -- --prefix "$HOME/.local"
 ```
 
 The default prefix is `/usr/local`, which requires write permission. Existing
@@ -104,11 +104,24 @@ complete configuration with every option explained.
 
 ## Documentation
 
+### Regional mirror catalogs
+
+```sh
+oci-mirror-proxy remote update --url https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/subscriptions/mirrors.json --region cn
+oci-mirror-proxy remote list
+oci-mirror-proxy remote update --all
+```
+
+The CLI supports custom `--url` JSON catalogs, per-source `.d` configuration,
+URL deduplication, atomic updates and previous-result backups. See
+[remote catalogs](docs/remotes.md) and [catalog details](subscriptions/README.md).
+Reloads preserve in-flight HTTP transfers and their resume candidates.
+
 - [docs/docker.md](docs/docker.md): Docker/Compose deployment and local builds.
 - [docs/configuration.md](docs/configuration.md): every configuration key and its default.
 - [docs/operations.md](docs/operations.md): commands, dockerd integration, reload, troubleshooting.
 - [docs/architecture.md](docs/architecture.md): components, request flow and failure handling.
-- [docs/testing.md](docs/testing.md): test layers, manual smoke test, and what is not verified.
+- [docs/testing.md](docs/testing.md): running checks and a local smoke test.
 
 ## Security notes
 
@@ -121,8 +134,3 @@ complete configuration with every option explained.
   the socket is `0600`.
 - Files that dockerd apply writes are backed up first, and revert restores them.
   Files that this tool did not create are not overwritten without `--force`.
-
-## Project policy
-
-The project depends only on the standard library and `gopkg.in/yaml.v3`. It must not
-depend on moby, docker/docker or containerd modules. `make deps-check` enforces this.

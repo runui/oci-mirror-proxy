@@ -38,68 +38,74 @@ func NewPool(env Env) *Pool {
 	return &Pool{env: env}
 }
 
-// Reconcile makes the pool match reg. Upstreams whose definition is unchanged keep
-// their runtime state, such as breaker position and counters. Changed or new
-// upstreams are rebuilt. When the breaker settings change, every endpoint is
-// rebuilt, because existing breakers carry the old thresholds. Any build error
-// leaves the pool exactly as it was.
+// Reconcile is the mutable-pool compatibility API. The service uses Fork so old
+// HTTP requests and their later resumes never observe a changed candidate set.
 func (p *Pool) Reconcile(ctx context.Context, reg config.Registry) error {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
-
-	p.mu.RLock()
-	current := make(map[string]*Endpoint, len(p.endpoints))
-	for _, e := range p.endpoints {
-		current[e.ID()] = e
+	next, err := p.Fork(ctx, reg)
+	if err != nil {
+		return err
 	}
-	rebuildAll := p.breaker != reg.Breaker
-	p.mu.RUnlock()
-
-	next := make([]*Endpoint, 0, len(reg.Upstreams))
-	seen := make(map[string]bool, len(reg.Upstreams))
-	for _, u := range reg.Upstreams {
-		if seen[u.ID] {
-			return fmt.Errorf("duplicate upstream id %q", u.ID)
-		}
-		seen[u.ID] = true
-
-		if old, ok := current[u.ID]; ok && !rebuildAll && old.Spec() == u {
-			next = append(next, old)
-			continue
-		}
-		e, err := NewEndpoint(ctx, u, reg.Breaker, p.env)
-		if err != nil {
-			return fmt.Errorf("upstream %q: %w", u.ID, err)
-		}
-		next = append(next, e)
-	}
-
 	p.mu.Lock()
-	dropped := droppedEndpoints(p.endpoints, next)
-	p.endpoints = next
+	old := p.endpoints
+	p.endpoints = next.endpoints
 	p.breaker = reg.Breaker
 	p.mu.Unlock()
-
-	for _, e := range dropped {
-		e.Close()
+	for _, e := range old {
+		e.Release()
 	}
 	return nil
 }
 
-// droppedEndpoints returns the endpoints of old that do not appear in next.
-// An endpoint is identified by pointer, so reused endpoints are never reported.
-func droppedEndpoints(old, next []*Endpoint) []*Endpoint {
-	keep := make(map[*Endpoint]bool, len(next))
-	for _, e := range next {
-		keep[e] = true
+// Fork prepares an immutable generation without changing the published pool.
+// Even unchanged endpoints get an ownership reference in the new generation;
+// retirement of the old generation must not close a reused connection pool.
+func (p *Pool) Fork(ctx context.Context, reg config.Registry) (*Pool, error) {
+	next := NewPool(p.env)
+	p.mu.RLock()
+	current := map[string]*Endpoint{}
+	for _, e := range p.endpoints {
+		// Pin the snapshot before dropping the lock: the compatibility API
+		// may concurrently remove an endpoint while this fork is preparing.
+		e.Retain()
+		current[e.URL()] = e
 	}
-	var dropped []*Endpoint
-	for _, e := range old {
-		if !keep[e] {
-			dropped = append(dropped, e)
+	reuse := p.breaker == reg.Breaker
+	p.mu.RUnlock()
+	defer func() {
+		for _, e := range current {
+			e.Release()
 		}
+	}()
+	seen := map[string]bool{}
+	for _, u := range reg.Upstreams {
+		if seen[u.URL] {
+			next.Release()
+			return nil, fmt.Errorf("duplicate upstream URL %q", u.URL)
+		}
+		seen[u.URL] = true
+		e := current[u.URL]
+		if e == nil || !reuse || e.Spec() != u {
+			var err error
+			e, err = NewEndpoint(ctx, u, reg.Breaker, p.env)
+			if err != nil {
+				next.Release()
+				return nil, err
+			}
+		}
+		e.Retain()
+		next.endpoints = append(next.endpoints, e)
 	}
-	return dropped
+	next.breaker = reg.Breaker
+	return next, nil
+}
+
+// Release is called once when the owning generation has drained.
+func (p *Pool) Release() {
+	for _, e := range p.endpoints {
+		e.Release()
+	}
 }
 
 // Candidates returns the enabled endpoints in priority order. The result is a

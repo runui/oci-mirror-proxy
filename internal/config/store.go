@@ -2,11 +2,13 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -16,15 +18,36 @@ import (
 // AppName is used for per-user file locations.
 const AppName = "oci-mirror-proxy"
 
-const fileHeader = "# oci-mirror-proxy configuration.\n# Changes made through the CLI are written back to this file.\n"
+const fileHeader = "# oci-mirror-proxy configuration.\n# The CLI preserves source files; local overrides are written to the sibling .d directory.\n"
 
-// Load reads, decodes, defaults and validates the configuration at path.
+// Load reads the main file and its drop-ins, merges them, applies defaults, and
+// validates the effective configuration under a shared collection lock.
 func Load(path string) (Config, error) {
-	data, err := os.ReadFile(path)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	unlock, err := ReadLock(ctx, path)
 	if err != nil {
-		return Config{}, fmt.Errorf("read config: %w", err)
+		return Config{}, err
 	}
-	return Decode(data)
+	defer unlock()
+	b, err := LoadBundle(path)
+	if err != nil {
+		return Config{}, err
+	}
+	// ReadLock does not create a sidecar on a read-only mount. If the first
+	// writer created one while we were reading, wait for it and verify again
+	// under that lock; two optimistic reads alone could see a paused writer's
+	// intermediate multi-file state. A missing sidecar here means no writer
+	// began before the snapshot completed.
+	verifyUnlock, err := ReadLock(ctx, path)
+	if err != nil {
+		return Config{}, err
+	}
+	defer verifyUnlock()
+	if err := b.CheckUnchanged(); err != nil {
+		return Config{}, err
+	}
+	return b.Effective, nil
 }
 
 // Decode parses configuration bytes. Unknown keys are rejected so typos fail loudly.

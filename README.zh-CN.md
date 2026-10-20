@@ -14,9 +14,9 @@
 
 ## 项目状态
 
-已实现并测试：用于拉取的仓库 API、故障转移、熔断、对冲请求、blob 断点续传、令牌和 Basic 认证、管理套接字、配置重载，以及支持还原的 dockerd 配置管理。
+支持的功能：用于拉取的仓库 API、故障转移、熔断、对冲请求、blob 断点续传、令牌和 Basic 认证、管理套接字、配置重载，以及支持还原的 dockerd 配置管理。
 
-目前有意不实现：推送、本地 blob 缓存（已在 `internal/cache` 预留扩展点）、密钥链后端和指标导出。
+暂不支持：推送、本地 blob 缓存、密钥链后端和指标导出。
 
 ## 环境要求
 
@@ -84,11 +84,24 @@ dist/oci-mirror-proxy doctor                  # 检查代理、dockerd 和配置
 
 ## 文档
 
+### 按区域订阅镜像目录
+
+```sh
+oci-mirror-proxy remote update --region cn
+oci-mirror-proxy remote list
+oci-mirror-proxy remote update --all
+```
+
+CLI 默认更新仓库的 JSON 目录，也支持自定义 `--url`。每个源保存到独立 `.d` 片段，
+最终按 URL 去重，更新采用原子写入并备份上一次结果。
+重载不会取消已有 HTTP 拉取或改变其续传候选。
+详见[远端订阅](docs/zh-CN/remotes.md)与[镜像目录说明](subscriptions/README.zh-CN.md)。
+
 - [Docker 部署](docs/zh-CN/docker.md)：Docker/Compose 部署及本地构建。
 - [配置参考](docs/zh-CN/configuration.md)：所有配置项及其默认值。
 - [运维指南](docs/zh-CN/operations.md)：命令、dockerd 集成、重载和故障排查。
 - [架构说明](docs/zh-CN/architecture.md)：组件、请求流程和故障处理。
-- [测试说明](docs/zh-CN/testing.md)：测试分层、手动冒烟测试和未验证的范围。
+- [测试说明](docs/zh-CN/testing.md)：运行检查和本地冒烟测试。
 
 ## 安全注意事项
 
@@ -97,7 +110,3 @@ dist/oci-mirror-proxy doctor                  # 检查代理、dockerd 和配置
 - 客户端的 `Authorization` 请求头不会被转发到上游。
 - 管理套接字通过文件权限保护：目录权限为 `0700`，套接字权限为 `0600`。
 - `dockerd apply` 写入文件前会先备份，`revert` 会恢复备份。除非指定 `--force`，否则不会覆盖非本工具创建的文件。
-
-## 项目依赖策略
-
-项目仅依赖标准库和 `gopkg.in/yaml.v3`，不得依赖 moby、docker/docker 或 containerd 模块。`make deps-check` 会检查这一约束。

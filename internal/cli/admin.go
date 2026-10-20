@@ -36,7 +36,7 @@ func cmdStatus(args []string, stdout, stderr io.Writer) error {
 				state = "disabled"
 			}
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
-				reg.Alias, up.ID, state, up.Breaker, up.Requests, up.Failures, up.LastLatency)
+				reg.Alias, up.URL, state, up.Breaker, up.Requests, up.Failures, up.LastLatency)
 		}
 	}
 	return tw.Flush()
@@ -84,7 +84,7 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 		return printUpstreams(stdout, ups)
 
 	case "add":
-		id := fs.String("id", "", "upstream identifier")
+		id := fs.String("id", "", "optional legacy upstream label")
 		url := fs.String("url", "", "base URL of the Registry v2 endpoint")
 		authType := fs.String("auth", config.AuthNone, "none, basic or token")
 		username := fs.String("username", "", "username for basic or token auth")
@@ -98,8 +98,8 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 		if err := parseFlags(fs, rest); err != nil {
 			return err
 		}
-		if *id == "" || *url == "" {
-			return fmt.Errorf("%w: --id and --url are required", errUsage)
+		if *url == "" {
+			return fmt.Errorf("%w: --url is required", errUsage)
 		}
 		client, err := adminClient(*socketFlag, *configPath)
 		if err != nil {
@@ -122,16 +122,23 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 		if err := client.AddUpstream(*registry, spec); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "added upstream %s to %s\n", *id, *registry)
+		fmt.Fprintf(stdout, "added upstream %s to %s\n", *url, *registry)
 		return nil
 
 	case "enable", "disable", "remove":
 		id := fs.String("id", "", "upstream identifier")
+		url := fs.String("url", "", "upstream URL (preferred over legacy --id)")
 		if err := parseFlags(fs, rest); err != nil {
 			return err
 		}
+		if *url != "" {
+			if *id != "" {
+				return fmt.Errorf("%w: --url and --id are mutually exclusive", errUsage)
+			}
+			*id = *url
+		}
 		if *id == "" {
-			return fmt.Errorf("%w: --id is required", errUsage)
+			return fmt.Errorf("%w: --url or legacy --id is required", errUsage)
 		}
 		client, err := adminClient(*socketFlag, *configPath)
 		if err != nil {

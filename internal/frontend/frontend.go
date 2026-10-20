@@ -61,7 +61,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NAME_UNKNOWN", "unrecognised registry API path")
 		return
 	}
-	dispatcher, ok := h.routes.Lookup(parsed.Alias)
+	var dispatcher route.Dispatcher
+	var ok bool
+	if leased, supported := h.routes.(interface {
+		Acquire(string) (route.Dispatcher, func(), bool)
+	}); supported {
+		var release func()
+		dispatcher, release, ok = leased.Acquire(parsed.Alias)
+		// Registered before Body.Close below: LIFO ordering closes all stream
+		// wrappers before the generation's ownership references are released.
+		defer release()
+	} else {
+		dispatcher, ok = h.routes.Lookup(parsed.Alias)
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, "NAME_UNKNOWN", fmt.Sprintf("registry %q is not configured", parsed.Alias))
 		return

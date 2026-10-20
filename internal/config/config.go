@@ -94,7 +94,7 @@ type Breaker struct {
 // Upstream is one user-configured Registry v2 endpoint.
 // It is comparable, so the runtime can detect unchanged definitions with ==.
 type Upstream struct {
-	ID       string   `yaml:"id"`
+	ID       string   `yaml:"id,omitempty"` // Legacy label; URL is the upstream identity.
 	URL      string   `yaml:"url"`
 	Disabled bool     `yaml:"disabled,omitempty"`
 	Timeouts Timeouts `yaml:"timeouts"`
@@ -291,7 +291,7 @@ func validateRegistry(alias string, r Registry) error {
 
 	seen := make(map[string]bool, len(r.Upstreams))
 	for i, u := range r.Upstreams {
-		if seen[u.ID] {
+		if u.ID != "" && seen[u.ID] {
 			errs = append(errs, wrap(fmt.Errorf("duplicate upstream id %q", u.ID)))
 		}
 		seen[u.ID] = true
@@ -304,7 +304,7 @@ func validateRegistry(alias string, r Registry) error {
 
 func validateUpstream(u Upstream) error {
 	var errs []error
-	if !upstreamIDPattern.MatchString(u.ID) {
+	if u.ID != "" && !upstreamIDPattern.MatchString(u.ID) {
 		errs = append(errs, fmt.Errorf("id %q must be 1-63 letters, digits, '-' or '_'", u.ID))
 	}
 	if err := validateBaseURL(u.URL); err != nil {

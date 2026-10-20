@@ -6,6 +6,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"sync"
 	"sync/atomic"
 
 	"github.com/runui/oci-mirror-proxy/internal/scheduler"
@@ -51,36 +52,79 @@ func (r Route) Dispatch(ctx context.Context, req scheduler.Request) (*scheduler.
 	return r.Strategy.Execute(ctx, req, r.Source.Candidates())
 }
 
-// Table maps registry aliases to dispatchers. Lookups are lock-free, and a whole
-// new table is published with Swap. Requests in flight keep the table they started with.
+// Table publishes whole immutable generations. Acquire briefly locks to pin a
+// generation safely against retirement; streaming and retries never hold it.
 type Table struct {
-	current atomic.Pointer[map[string]Dispatcher]
+	mu      sync.RWMutex // held only to acquire/publish a generation, never while serving bytes
+	current atomic.Pointer[generation]
+}
+
+type generation struct {
+	routes  map[string]Dispatcher
+	refs    atomic.Int64
+	cleanup func()
+}
+
+func (g *generation) release() {
+	if g.refs.Add(-1) == 0 && g.cleanup != nil {
+		g.cleanup()
+	}
 }
 
 // NewTable returns a table with no routes.
 func NewTable() *Table {
 	t := &Table{}
-	empty := map[string]Dispatcher{}
-	t.current.Store(&empty)
+	g := &generation{routes: map[string]Dispatcher{}}
+	g.refs.Store(1)
+	t.current.Store(g)
 	return t
 }
 
 // Swap atomically replaces every route. The map is copied, so the caller may reuse it.
 func (t *Table) Swap(routes map[string]Dispatcher) {
+	t.SwapWithCleanup(routes, nil)
+}
+
+// SwapWithCleanup publishes all registries together. The previous generation
+// is reclaimed only after every acquired HTTP request has closed its body.
+func (t *Table) SwapWithCleanup(routes map[string]Dispatcher, cleanup func()) {
 	copied := maps.Clone(routes)
 	if copied == nil {
 		copied = map[string]Dispatcher{}
 	}
-	t.current.Store(&copied)
+	g := &generation{routes: copied, cleanup: cleanup}
+	g.refs.Store(1)
+	t.mu.Lock()
+	old := t.current.Swap(g)
+	t.mu.Unlock()
+	old.release()
 }
 
-// Lookup returns the dispatcher for alias.
+// Acquire pins the entire generation, not just its first upstream attempt.
+// Resume and Adaptive must keep using the same candidate set after reload.
+func (t *Table) Acquire(alias string) (Dispatcher, func(), bool) {
+	t.mu.RLock()
+	g := t.current.Load()
+	d, ok := g.routes[alias]
+	if ok {
+		g.refs.Add(1)
+	}
+	t.mu.RUnlock()
+	if !ok {
+		return nil, func() {}, false
+	}
+	var once sync.Once
+	return d, func() { once.Do(g.release) }, true
+}
+
+// Lookup is a non-owning inspection. Request handlers must use Acquire so the
+// dispatcher's transports cannot be retired while its body/retries are live.
 func (t *Table) Lookup(alias string) (Dispatcher, bool) {
-	d, ok := (*t.current.Load())[alias]
+	d, ok := t.current.Load().routes[alias]
 	return d, ok
 }
 
 // Aliases returns the configured aliases in sorted order.
 func (t *Table) Aliases() []string {
-	return slices.Sorted(maps.Keys(*t.current.Load()))
+	return slices.Sorted(maps.Keys(t.current.Load().routes))
 }

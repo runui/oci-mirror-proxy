@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "regions": {
+    "cn": "中国大陆",
+    "apac": "亚太",
+    "eu": "欧洲",
+    "na": "北美",
+    "global": "全球"
+  },
+  "mirrors": [
+    {
+      "name": "DaoCloud Public Image Mirror",
+      "website": "https://github.com/DaoCloud/public-image-mirror",
+      "regions": ["cn"],
+      "endpoints": [
+        {"registry": "docker.io", "url": "https://docker.m.daocloud.io"},
+        {"registry": "ghcr.io", "url": "https://ghcr.m.daocloud.io"},
+        {"registry": "registry.k8s.io", "url": "https://k8s.m.daocloud.io"},
+        {"registry": "quay.io", "url": "https://quay.m.daocloud.io"}
+      ]
+    }
+  ]
+}

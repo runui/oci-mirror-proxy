@@ -65,7 +65,7 @@ func TestInitRefusesToOverwriteWithoutForce(t *testing.T) {
 
 func TestUpstreamAddRequiresIDAndURL(t *testing.T) {
 	code, _, errOut := run(t, "upstream", "add", "--admin-socket", "/tmp/nope.sock")
-	if code != 2 || !strings.Contains(errOut, "--id and --url are required") {
+	if code != 2 || !strings.Contains(errOut, "--url is required") {
 		t.Fatalf("code = %d, stderr = %q", code, errOut)
 	}
 }

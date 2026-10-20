@@ -1,6 +1,8 @@
 # Example configuration for oci-mirror-proxy.
 # Copy to the default location with: oci-mirror-proxy init
-# or pass a path with --config. This file is validated by the test suite.
+# or pass a path with --config.
+# Sibling config.example.d/*.yaml files are merged by URL within each registry.
+# IDs below are optional legacy labels; new entries only need a URL.
 
 version: 1
 

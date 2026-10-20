@@ -38,7 +38,8 @@ type Options struct {
 }
 
 // Service is a running proxy. Configuration changes are serialized by mu, and
-// requests never take that lock: they read the lock-free route table.
+// requests never take that lock: they briefly acquire a runtime generation,
+// then serve the entire response without holding configuration locks.
 type Service struct {
 	path     string
 	logger   *slog.Logger
@@ -81,7 +82,7 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 		},
 		pools: make(map[string]*upstream.Pool),
 	}
-	if err := s.apply(ctx, cfg, false); err != nil {
+	if err := s.apply(ctx, cfg, nil); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -99,57 +100,45 @@ func (s *Service) ListenAddr() string {
 	return s.applied.Listen
 }
 
-// apply makes next the running configuration. If any step fails, the previous
-// configuration is restored, so the service never runs a half-applied change.
-func (s *Service) apply(ctx context.Context, next config.Config, persist bool) error {
-	prev := s.applied
-	if err := s.reconcile(ctx, next); err != nil {
-		s.restore(ctx, prev)
-		return err
-	}
-	if persist {
-		if err := config.Save(s.path, next); err != nil {
-			s.restore(ctx, prev)
-			return fmt.Errorf("save configuration: %w", err)
+// apply prepares every registry without mutating the published generation.
+// Publication is infallible and follows persistence; neither a build error nor
+// a write failure can expose a half-applied runtime configuration.
+func (s *Service) apply(ctx context.Context, next config.Config, persist func() error) error {
+	pools := make(map[string]*upstream.Pool, len(next.Registries))
+	cleanup := func() {
+		for _, p := range pools {
+			p.Release()
 		}
 	}
+	for alias, reg := range next.Registries {
+		old := s.pools[alias]
+		if old == nil {
+			old = upstream.NewPool(s.env)
+		}
+		p, err := old.Fork(ctx, reg)
+		if err != nil {
+			cleanup()
+			return fmt.Errorf("registry %s: %w", alias, err)
+		}
+		pools[alias] = p
+	}
+	if persist != nil {
+		if err := persist(); err != nil {
+			cleanup()
+			return err
+		}
+	}
+	routes := make(map[string]route.Dispatcher, len(pools))
+	for alias, reg := range next.Registries {
+		routes[alias] = s.dispatcher(reg, pools[alias])
+	}
+	s.pools = pools
+	s.table.SwapWithCleanup(routes, cleanup)
 	s.applied = next
 	if s.logLevel != nil {
 		level, _ := next.LoggingLevel() // Configuration has already been validated.
 		s.logLevel.Set(level)
 	}
-	return nil
-}
-
-// reconcile brings the pools and the route table in line with cfg.
-func (s *Service) reconcile(ctx context.Context, cfg config.Config) error {
-	pools := make(map[string]*upstream.Pool, len(cfg.Registries))
-	for alias, reg := range cfg.Registries {
-		pool, ok := s.pools[alias]
-		if !ok {
-			pool = upstream.NewPool(s.env)
-		}
-		if err := pool.Reconcile(ctx, reg); err != nil {
-			return fmt.Errorf("registry %s: %w", alias, err)
-		}
-		pools[alias] = pool
-	}
-
-	routes := make(map[string]route.Dispatcher, len(pools))
-	for alias, reg := range cfg.Registries {
-		routes[alias] = s.dispatcher(reg, pools[alias])
-	}
-
-	// Pools for registries that are gone are emptied, which releases their connections.
-	for alias, old := range s.pools {
-		if _, kept := pools[alias]; !kept {
-			if err := old.Reconcile(ctx, config.Registry{}); err != nil {
-				s.logger.Warn("could not release pool", "registry", alias, "error", err)
-			}
-		}
-	}
-	s.pools = pools
-	s.table.Swap(routes)
 	return nil
 }
 
@@ -166,27 +155,35 @@ func (s *Service) dispatcher(reg config.Registry, pool *upstream.Pool) route.Dis
 	return route.Chain(route.Route{Source: pool, Strategy: strategy}, s.middle...)
 }
 
-func (s *Service) restore(ctx context.Context, prev config.Config) {
-	if err := s.reconcile(ctx, prev); err != nil {
-		s.logger.Error("could not restore the previous configuration", "error", err)
-	}
-}
-
-// mutate applies a change to the running configuration and persists it.
-// It edits a copy, so a failed change leaves no trace.
-func (s *Service) mutate(fn func(*config.Config) error) error {
+// mutate edits fresh document trees, prepares a complete generation, persists
+// the targeted edits, then publishes. Persistence attempts conditional rollback
+// on error; any rollback failures are reported without altering the runtime.
+func (s *Service) mutate(fn func(*config.Bundle) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	next := s.applied.Clone()
-	if err := fn(&next); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	unlock, err := config.Lock(ctx, s.path)
+	if err != nil {
 		return err
 	}
-	next.ApplyDefaults()
-	if err := next.Validate(); err != nil {
+	defer unlock()
+	// Disk may contain a CLI update not yet reloaded. Never write a clone of
+	// s.applied back over newer files; mutate the latest document set instead.
+	b, err := config.LoadBundle(s.path)
+	if err != nil {
 		return fmt.Errorf("%w: %w", admin.ErrInvalid, err)
 	}
-	return s.apply(context.Background(), next, true)
+	if err := fn(b); err != nil {
+		return err
+	}
+	if err := b.Merge(); err != nil {
+		return fmt.Errorf("%w: %w", admin.ErrInvalid, err)
+	}
+	next := b.Effective
+	next.Listen = s.applied.Listen
+	return s.apply(ctx, next, b.Persist)
 }
 
 // Status implements admin.Controller.
@@ -216,50 +213,60 @@ func (s *Service) ListUpstreams(alias string) ([]config.Upstream, error) {
 
 // AddUpstream implements admin.Controller.
 func (s *Service) AddUpstream(alias string, u config.Upstream) error {
-	return s.mutate(func(c *config.Config) error {
-		reg, ok := c.Registries[alias]
+	return s.mutate(func(b *config.Bundle) error {
+		reg, ok := b.Effective.Registries[alias]
 		if !ok {
 			return fmt.Errorf("%w: registry %q", admin.ErrNotFound, alias)
 		}
-		if _, found := findUpstream(reg, u.ID); found {
+		_, found := findUpstream(reg, u.ID)
+		canonical, _ := config.NormalizeURL(u.URL)
+		for _, existing := range reg.Upstreams {
+			if existing.URL == canonical {
+				found = true
+			}
+		}
+		if found {
 			return fmt.Errorf("%w: upstream %q already exists", admin.ErrConflict, u.ID)
 		}
-		reg.Upstreams = append(reg.Upstreams, u)
-		c.Registries[alias] = reg
+		if err := b.EditUpstream("add", alias, "", u, false); err != nil {
+			return fmt.Errorf("%w: %w", admin.ErrInvalid, err)
+		}
 		return nil
 	})
 }
 
 // SetUpstreamDisabled implements admin.Controller.
 func (s *Service) SetUpstreamDisabled(alias, id string, disabled bool) error {
-	return s.mutate(func(c *config.Config) error {
-		reg, ok := c.Registries[alias]
+	return s.mutate(func(b *config.Bundle) error {
+		reg, ok := b.Effective.Registries[alias]
 		if !ok {
 			return fmt.Errorf("%w: registry %q", admin.ErrNotFound, alias)
 		}
-		i, found := findUpstream(reg, id)
+		_, found := findUpstream(reg, id)
 		if !found {
 			return fmt.Errorf("%w: upstream %q", admin.ErrNotFound, id)
 		}
-		reg.Upstreams[i].Disabled = disabled
-		c.Registries[alias] = reg
+		if err := b.EditUpstream("disable", alias, id, config.Upstream{}, disabled); err != nil {
+			return fmt.Errorf("%w: %w", admin.ErrInvalid, err)
+		}
 		return nil
 	})
 }
 
 // RemoveUpstream implements admin.Controller.
 func (s *Service) RemoveUpstream(alias, id string) error {
-	return s.mutate(func(c *config.Config) error {
-		reg, ok := c.Registries[alias]
+	return s.mutate(func(b *config.Bundle) error {
+		reg, ok := b.Effective.Registries[alias]
 		if !ok {
 			return fmt.Errorf("%w: registry %q", admin.ErrNotFound, alias)
 		}
-		i, found := findUpstream(reg, id)
+		_, found := findUpstream(reg, id)
 		if !found {
 			return fmt.Errorf("%w: upstream %q", admin.ErrNotFound, id)
 		}
-		reg.Upstreams = slices.Delete(reg.Upstreams, i, i+1)
-		c.Registries[alias] = reg
+		if err := b.EditUpstream("remove", alias, id, config.Upstream{}, false); err != nil {
+			return fmt.Errorf("%w: %w", admin.ErrInvalid, err)
+		}
 		return nil
 	})
 }
@@ -279,23 +286,21 @@ func (s *Service) Reload() error {
 		s.logger.Warn("listen address changed; it takes effect after a restart", "listen", next.Listen)
 		next.Listen = s.applied.Listen
 	}
-	return s.apply(context.Background(), next, false)
+	return s.apply(context.Background(), next, nil)
 }
 
 // Close releases every upstream connection. Requests already in flight finish.
 func (s *Service) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for alias, pool := range s.pools {
-		if err := pool.Reconcile(context.Background(), config.Registry{}); err != nil {
-			s.logger.Warn("could not close pool", "registry", alias, "error", err)
-		}
-	}
+	s.table.SwapWithCleanup(nil, nil)
+	s.pools = map[string]*upstream.Pool{}
 }
 
 func findUpstream(reg config.Registry, id string) (int, bool) {
+	canonical, _ := config.NormalizeURL(id)
 	for i, u := range reg.Upstreams {
-		if u.ID == id {
+		if (id != "" && u.ID == id) || u.URL == canonical {
 			return i, true
 		}
 	}

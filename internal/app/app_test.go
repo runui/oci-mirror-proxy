@@ -109,7 +109,9 @@ func TestDeliveryPolicyReloadKeepsDispatcherSnapshot(t *testing.T) {
 		w.WriteHeader(307)
 	}))
 	defer registry.Close()
-	cfg := baseConfig(upstreamFor("primary", registry.URL), upstreamFor("alternate", registry.URL))
+	// Distinct path prefixes are distinct upstream URLs; duplicate URLs are
+	// intentionally merged into one candidate by configuration loading.
+	cfg := baseConfig(upstreamFor("primary", registry.URL), upstreamFor("alternate", registry.URL+"/alternate"))
 	svc, path := newService(t, cfg)
 	old, _ := svc.table.Lookup("docker.io")
 	reg := cfg.Registries["docker.io"]

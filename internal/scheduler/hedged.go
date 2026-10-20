@@ -47,7 +47,9 @@ func (h Hedged) Execute(ctx context.Context, req Request, cands []Candidate) (*R
 		// affect the winner's response body.
 		actx, cancel := context.WithCancel(ctx)
 		cancels = append(cancels, cancel)
+		release := retainCandidate(c)
 		go func() {
+			defer release()
 			resp, err := runAttempt(actx, req, c)
 			results <- attempt{idx: idx, id: c.ID(), resp: resp, err: err}
 		}()

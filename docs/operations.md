@@ -4,6 +4,12 @@
 
 ## Commands
 
+Remote mirror catalogs are managed by `remote list`, `remote update [--url U]
+--region cn`, `remote update --all`, and `remote remove --url U`. Updates/removal
+support `--dry-run` and previous-result backups; see [remote catalogs](remotes.md).
+Upstreams may be added without `--id`; enable/disable/remove accept `--url`
+instead of the legacy label. Reload does not interrupt in-flight HTTP transfers.
+
 | Command | Purpose |
 |---|---|
 | `init [--config F] [--force]` | Write a default configuration file. |
@@ -30,7 +36,7 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error.
 | `--certs-dir` | `/etc/docker/certs.d` | `$XDG_CONFIG_HOME/docker/certs.d` |
 | `--daemon-json` | `/etc/docker/daemon.json` | `$XDG_CONFIG_HOME/docker/daemon.json` |
 | `--docker-socket` | `/var/run/docker.sock` | `$XDG_RUNTIME_DIR/docker.sock` |
-| `--pid-file` | `/var/run/docker.pid` | `$XDG_RUNTIME_DIR/docker.pid` (assumed, see below) |
+| `--pid-file` | `/var/run/docker.pid` | `$XDG_RUNTIME_DIR/docker.pid` |
 | `--state-dir` | `/var/lib/oci-mirror-proxy` | `$XDG_STATE_HOME/oci-mirror-proxy` |
 
 `--store auto` asks the running dockerd which image store it uses. Pass
@@ -103,9 +109,9 @@ this. Choose one of these:
   service override. This lets rootless dockerd reach host loopback services, which
   is a security trade-off you must accept consciously.
 
-The rootless `daemon.json` location (`$XDG_CONFIG_HOME/docker/daemon.json`) and the
-rootless pid file location (`$XDG_RUNTIME_DIR/docker.pid`) are assumptions. The first
-was checked against the moby source. Pass `--pid-file` if your installation differs.
+The default rootless paths are `$XDG_CONFIG_HOME/docker/daemon.json` and
+`$XDG_RUNTIME_DIR/docker.pid`. Pass `--daemon-json` or `--pid-file` if your
+installation uses different paths.
 
 ## Logs
 

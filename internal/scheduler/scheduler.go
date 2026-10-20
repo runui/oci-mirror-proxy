@@ -73,6 +73,19 @@ type Candidate interface {
 	Attempt(ctx context.Context, req Request) (*Result, error)
 }
 
+// retainCandidate pins transports across goroutine launch: the parent HTTP
+// handler can finish before a hedged loser or adaptive probe even starts.
+func retainCandidate(c Candidate) func() {
+	if owner, ok := c.(interface {
+		Retain()
+		Release()
+	}); ok {
+		owner.Retain()
+		return owner.Release
+	}
+	return func() {}
+}
+
 // Strategy spreads one request over candidates given in priority order.
 // Implementations must close every response they discard, and must return an
 // *Exhausted error when no candidate produced an acceptable response.

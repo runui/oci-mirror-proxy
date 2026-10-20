@@ -8,6 +8,28 @@ by hand, or changed through the CLI, which validates every change before saving.
 
 Durations use Go syntax: `500ms`, `5s`, `1m30s`.
 
+## Drop-in files and URL merging
+
+`config.yaml` also loads direct, visible `config.d/*.yaml` and `*.yml` files.
+`--config /path/proxy.yml` uses `/path/proxy.d/`. The main file is required;
+a missing drop-in directory is fine. Files load lexically after the main file,
+except `local-overrides.yaml`, which is reserved for existing-URL patches and
+loads last. Hidden/temp/backup files and subdirectories are ignored.
+
+Mappings merge recursively; later explicitly declared values override earlier
+ones, including `false`. Defaults are applied only after merging. Upstreams
+merge by normalized URL within each registry: first occurrence determines
+position, later explicit options override the same URL. `upstreams: []` does not
+clear previous sources. Scheme/host case, default ports, and a root slash are
+normalized; meaningful paths remain distinct. No upstream ID is required.
+Duplicate keys, multiple YAML documents, YAML aliases/merge keys, unknown fields,
+and unsupported explicit versions are rejected. A bad fragment rejects the
+entire update, keeping the running configuration unchanged.
+
+`local-overrides.yaml` patches only already-provided URLs, so local disabled
+choices survive updates without reintroducing URLs removed from all sources.
+See [remote catalogs](remotes.md) for subscription files and backups.
+
 ## Top level
 
 | Key | Default | Description |
@@ -25,7 +47,7 @@ The address dockerd connects to is `advertise` when set. Otherwise it is
 For debugging, add top-level `log_level: debug` and run `oci-mirror-proxy reload`.
 Debug logs correlate requests with `request_id` and record routing strategy,
 candidates, attempt latency/status, breaker skips, hedging and the selected upstream.
-`upstream` is the mirror ID; `via` is its configured base URL. `upstream hit`
+`upstream` is the legacy label when present, otherwise its URL; `via` is its configured base URL. `upstream hit`
 means a successful response; `upstream selected` identifies the actual winner
 (other successful racing responses may be discarded). This does not indicate
 the mirror's internal cache status. Latency ends at response headers, not blob
@@ -57,7 +79,7 @@ so racing is off by default and should be enabled deliberately.
 
 | Key | Default | Description |
 |---|---|---|
-| `id` | required | Unique within the registry. 1 to 63 letters, digits, `-` or `_`. |
+| `id` | omitted | Optional legacy label, unique within the registry. 1 to 63 letters, digits, `-` or `_`. URL is the identity; new configurations need no ID. |
 | `url` | required | Base URL of a Registry v2 endpoint. `http` or `https`, with no query, fragment or credentials. A base path such as `/hub` is allowed. |
 | `disabled` | `false` | Keep the upstream in the file but out of rotation. |
 | `timeouts.connect` | `10s` | Maximum time to establish the connection: the TCP dial and the TLS handshake. Raise it for slow or proxied paths. |
@@ -102,10 +124,14 @@ after that delay.
 
 ## Changing the configuration
 
-- **Through the CLI or admin API**: changes are validated, applied to the running proxy
-  without a restart, and then saved to the file atomically. A change that fails
-  validation leaves both the running state and the file untouched.
+- **Through the CLI or admin API**: changes are validated, saved, and applied
+  without a restart. Validation failures leave the files and running configuration
+  unchanged. New upstreams go in the main file; enable/disable choices are saved
+  in `local-overrides.yaml`.
 - **By hand**: edit the file, then run `oci-mirror-proxy reload` or send `SIGHUP`
   to the process. A file that fails validation is rejected, and the running
   configuration is kept.
 - **Listen address**: a change to `listen` is logged, and takes effect after a restart.
+- **In-flight transfers**: reload does not interrupt existing HTTP requests or
+  change their resume candidates. Later HTTP requests, including those in the
+  same `docker pull`, use the new configuration.

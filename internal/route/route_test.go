@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/runui/oci-mirror-proxy/internal/scheduler"
@@ -19,6 +21,49 @@ func (c idCandidate) ID() string { return string(c) }
 
 func (c idCandidate) Attempt(context.Context, scheduler.Request) (*scheduler.Result, error) {
 	return nil, scheduler.ErrSkipped
+}
+
+func TestGenerationCleanupWaitsForLeaseAndRunsOnce(t *testing.T) {
+	table := NewTable()
+	var cleaned atomic.Int32
+	table.SwapWithCleanup(map[string]Dispatcher{"docker.io": DispatcherFunc(nil)}, func() { cleaned.Add(1) })
+	_, release, ok := table.Acquire("docker.io")
+	if !ok {
+		t.Fatal("missing route")
+	}
+	table.Swap(nil)
+	if cleaned.Load() != 0 {
+		t.Fatal("retired a live generation")
+	}
+	release()
+	release()
+	if cleaned.Load() != 1 {
+		t.Fatal("cleanup did not run exactly once")
+	}
+}
+
+func TestConcurrentGenerationAcquireAndPublish(t *testing.T) {
+	table := NewTable()
+	var cleaned atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 1000; j++ {
+				_, release, _ := table.Acquire("docker.io")
+				release()
+			}
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		table.SwapWithCleanup(map[string]Dispatcher{"docker.io": DispatcherFunc(nil)}, func() { cleaned.Add(1) })
+	}
+	wg.Wait()
+	table.Swap(nil)
+	if cleaned.Load() != 100 {
+		t.Fatalf("leaked generations: %d", cleaned.Load())
+	}
 }
 
 func TestChainOrderIsOutermostFirst(t *testing.T) {

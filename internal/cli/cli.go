@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 
 	"github.com/runui/oci-mirror-proxy/internal/config"
@@ -39,6 +38,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		err = cmdReload(args[1:], stderr)
 	case "upstream":
 		err = cmdUpstream(args[1:], stdout, stderr)
+	case "remote":
+		err = cmdRemote(ctx, args[1:], stdout, stderr)
 	case "dockerd":
 		err = cmdDockerd(ctx, args[1:], stdout, stderr)
 	case "doctor":
@@ -87,6 +88,9 @@ Running:
 
 Upstreams:
   upstream list|add|enable|disable|remove
+
+Remote mirror catalogs:
+  remote list|update|remove
 
 Other:
   version              print the version
@@ -162,15 +166,6 @@ func resolveAdminSocket(explicit, configPath string) (string, error) {
 		return "/run/oci-mirror-proxy/admin.sock", nil
 	}
 	return config.DefaultAdminSocket()
-}
-
-// newLogger creates a text logger at the requested level.
-func newLogger(w io.Writer, level string) (*slog.Logger, error) {
-	var lvl slog.Level
-	if err := lvl.UnmarshalText([]byte(level)); err != nil {
-		return nil, fmt.Errorf("%w: invalid log level %q (want debug, info, warn or error)", errUsage, level)
-	}
-	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: lvl})), nil
 }
 
 func cmdInit(args []string, stderr, stdout io.Writer) error {

@@ -3,9 +3,11 @@ package upstream
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +27,7 @@ type Env struct {
 
 // Endpoint is one upstream registry. It implements scheduler.Candidate.
 type Endpoint struct {
+	refs    atomic.Int64 // generation owners and live attempts, including background probes
 	spec    config.Upstream
 	base    *url.URL
 	client  *http.Client
@@ -62,6 +65,7 @@ func NewEndpoint(ctx context.Context, spec config.Upstream, breaker config.Break
 		Now:        env.Now,
 	})
 	if err != nil {
+		transport.CloseIdleConnections()
 		return nil, err
 	}
 	return &Endpoint{
@@ -74,7 +78,12 @@ func NewEndpoint(ctx context.Context, spec config.Upstream, breaker config.Break
 }
 
 // ID returns the upstream identifier, unique within its registry.
-func (e *Endpoint) ID() string { return e.spec.ID }
+func (e *Endpoint) ID() string {
+	if e.spec.ID != "" {
+		return e.spec.ID
+	}
+	return e.spec.URL
+}
 
 // URL returns the configured base URL, never an authenticated or redirected URL.
 func (e *Endpoint) URL() string { return e.spec.URL }
@@ -85,6 +94,43 @@ func (e *Endpoint) Spec() config.Upstream { return e.spec }
 // Attempt sends one request to this upstream and feeds the outcome to the breaker.
 // All health logic lives here, so strategies stay unaware of it.
 func (e *Endpoint) Attempt(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
+	// A hedged loser or adaptive probe may outlive its downstream handler.
+	// Its transport cannot be retired until its own response has been closed.
+	e.Retain()
+	resp, err := e.attempt(ctx, req)
+	if err != nil || resp == nil || resp.Body == nil || resp.RedirectLocation() != "" {
+		e.Release()
+	} else {
+		resp.Body = &endpointBody{ReadCloser: resp.Body, release: e.Release}
+	}
+	return resp, err
+}
+
+type endpointBody struct {
+	io.ReadCloser
+	once    sync.Once
+	release func()
+	err     error
+}
+
+func (b *endpointBody) Close() error {
+	b.once.Do(func() {
+		b.err = b.ReadCloser.Close()
+		b.release()
+	})
+	return b.err
+}
+
+// Retain must be called while the caller already owns a live generation or
+// attempt reference; it must not resurrect an endpoint after final Release.
+func (e *Endpoint) Retain() { e.refs.Add(1) }
+func (e *Endpoint) Release() {
+	if e.refs.Add(-1) == 0 {
+		e.Close()
+	}
+}
+
+func (e *Endpoint) attempt(ctx context.Context, req scheduler.Request) (*scheduler.Result, error) {
 	if !e.breaker.Allow() {
 		return nil, scheduler.ErrSkipped
 	}

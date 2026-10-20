@@ -66,6 +66,17 @@ type trackedCandidate struct {
 	response *Result
 }
 
+func (c *trackedCandidate) Retain() {
+	if owner, ok := c.Candidate.(interface{ Retain() }); ok {
+		owner.Retain()
+	}
+}
+func (c *trackedCandidate) Release() {
+	if owner, ok := c.Candidate.(interface{ Release() }); ok {
+		owner.Release()
+	}
+}
+
 func (c *trackedCandidate) Attempt(ctx context.Context, req Request) (*Result, error) {
 	r, err := c.Candidate.Attempt(ctx, req)
 	c.mu.Lock()
@@ -238,7 +249,16 @@ func (b *adaptiveBody) startProbe(rate float64) {
 	result := make(chan probeResult)
 	b.probe = result
 	offset := b.offset
+	var releases []func()
+	for _, c := range candidates {
+		releases = append(releases, retainCandidate(c))
+	}
 	go func() {
+		defer func() {
+			for _, release := range releases {
+				release()
+			}
+		}()
 		r := b.probeCandidates(rate, offset, candidates)
 		select {
 		case result <- r:
