@@ -6,6 +6,7 @@ usage() {
 Install or update oci-mirror-proxy from https://git.zmide.com/bin/oci-mirror-proxy.
 
 Usage: ./install.sh [--prefix DIR] [--version TAG] [--build] [--update] [--service]
+                    [-- REMOTE_UPDATE_ARGS...]
 
 Options:
   --prefix DIR   Install into DIR/bin (default: /usr/local).
@@ -13,6 +14,7 @@ Options:
   --build        Compile release source instead of downloading a binary.
   --update       Replace the binary found in PATH, unless --prefix is supplied.
   --service      Install and start a systemd/OpenRC system service (requires root).
+  --             Pass remaining arguments to remote update.
   -h, --help     Show this help.
 
 Environment:
@@ -31,6 +33,68 @@ EOF
 die() {
     printf 'error: %s\n' "$*" >&2
     exit 1
+}
+
+init_config() {
+    init_path=$1
+    shift
+    "$destination" init --config "$init_path" "$@" || return 1
+    adaptive_config=$(mktemp "$(dirname -- "$init_path")/.config.yaml.XXXXXXXX") || return 1
+    # Only edit the freshly generated docker.io setting, not other registries or race.enabled.
+    if awk '
+        /^  [^ ]/ { docker = ($0 == "  docker.io:"); adaptive = 0 }
+        /^    [^ ]/ { adaptive = (docker && $0 == "    adaptive:") }
+        adaptive && /^      enabled:/ { $0 = "      enabled: true"; updated = 1 }
+        { print }
+        END { if (!updated) exit 1 }
+    ' "$init_path" > "$adaptive_config" && mv -f "$adaptive_config" "$init_path"; then
+        return 0
+    fi
+    rm -f "$adaptive_config"
+    return 1
+}
+
+sync_remote() {
+    sync_config=
+    sync_config_value=false
+    for sync_arg do
+        if [ "$sync_config_value" = true ]; then
+            sync_config=$sync_arg
+            sync_config_value=false
+            continue
+        fi
+        case "$sync_arg" in
+            --config|-config) sync_config_value=true ;;
+            --config=*|-config=*) sync_config=${sync_arg#*=} ;;
+        esac
+    done
+    if [ -n "$sync_config" ]; then
+        : # An explicit remote configuration does not change the service configuration.
+    elif [ -n "$manager" ]; then
+        sync_config=$config
+    else
+        # Match the CLI's per-user path and user-before-system discovery order.
+        case "$os" in
+            darwin)
+                [ -n "${HOME:-}" ] || return 1
+                sync_dir="$HOME/Library/Application Support"
+                ;;
+            *)
+                sync_dir=${XDG_CONFIG_HOME:-${HOME:+$HOME/.config}}
+                [ -n "$sync_dir" ] || return 1
+                ;;
+        esac
+        sync_config="$sync_dir/oci-mirror-proxy/config.yaml"
+        if [ ! -e "$sync_config" ] && [ ! -L "$sync_config" ]; then
+            if [ -e /etc/oci-mirror-proxy/config.yaml ] || [ -L /etc/oci-mirror-proxy/config.yaml ]; then
+                sync_config=/etc/oci-mirror-proxy/config.yaml
+            fi
+        fi
+    fi
+    if [ ! -e "$sync_config" ] && [ ! -L "$sync_config" ]; then
+        init_config "$sync_config" || return 1
+    fi
+    "$destination" remote update --config "$sync_config" "$@"
 }
 
 repo=${DOWNLOAD_BASE_URL:-https://git.zmide.com/bin/oci-mirror-proxy}
@@ -58,6 +122,7 @@ while [ "$#" -gt 0 ]; do
         --build) build=true; shift ;;
         --update) update=true; shift ;;
         --service) service=true; shift ;;
+        --) shift; break ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -227,9 +292,10 @@ if [ "$build" = true ]; then
     curl --fail --silent --show-error --location "$repo/archive/$version.tar.gz" > "$build_dir/source.tar.gz"
     mkdir "$build_dir/source"
     tar -xzf "$build_dir/source.tar.gz" -C "$build_dir/source"
-    set -- "$build_dir"/source/*
-    [ "$#" -eq 1 ] && [ -f "$1/go.mod" ] || die 'unexpected source archive layout'
     (
+        # Keep the outer positional parameters for remote update.
+        set -- "$build_dir"/source/*
+        [ "$#" -eq 1 ] && [ -f "$1/go.mod" ] || die 'unexpected source archive layout'
         cd "$1"
         CGO_ENABLED=0 GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) go build -trimpath \
             -ldflags "-s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version=$version" \
@@ -248,7 +314,7 @@ if [ -n "$manager" ]; then
     config=/etc/oci-mirror-proxy/config.yaml
     if [ ! -e "$config" ] && [ ! -L "$config" ]; then
         install -d -m 700 /etc/oci-mirror-proxy
-        "$destination" init --config "$config" --admin-socket /run/oci-mirror-proxy/admin.sock
+        init_config "$config" --admin-socket /run/oci-mirror-proxy/admin.sock
     fi
     if [ "$manager" = systemd ]; then
         install -m 644 "$build_dir/service" "$service_file"
@@ -272,6 +338,12 @@ elif [ "$update" = true ]; then
     printf 'Configuration preserved. Restart any running proxy service to use the update.\n'
 else
     printf '\nAdd the installation directory to PATH, then run:\n'
-    printf '  oci-mirror-proxy init\n'
     printf '  oci-mirror-proxy serve\n'
+fi
+
+printf '\nSyncing remote subscriptions...\n'
+if sync_output=$(sync_remote "$@" 2>&1); then
+    printf '%s\n' "$sync_output"
+else
+    printf 'Warning: remote subscription sync failed; installation succeeded.\n%s\n' "$sync_output" >&2
 fi

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -84,7 +85,7 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		socket = fs.String("admin-socket", "", "admin socket to notify after writing")
 	}
 	if action == "update" {
-		region = fs.String("region", "", "comma-separated regions; saved per remote")
+		region = fs.String("region", "", "comma-separated regions (empty selects all sites)")
 		all = fs.Bool("all", false, "update every configured remote")
 		allowEmpty = fs.Bool("allow-empty", false, "allow an empty selected mirror list")
 	}
@@ -237,7 +238,6 @@ func editRemote(ctx context.Context, main, raw string, regions []string, catalog
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
-	var meta remoteMeta
 	if err == nil {
 		if info, e := os.Lstat(path); e != nil || !info.Mode().IsRegular() {
 			return false, errors.New("remote must be a regular file")
@@ -249,17 +249,17 @@ func editRemote(ctx context.Context, main, raw string, regions []string, catalog
 		if !managed || m.URL != raw {
 			return false, errors.New("refusing to replace a file owned by another source")
 		}
-		meta = m
 	} else if action == "remove" {
 		return false, errors.New("remote is not configured")
 	}
 	var after []byte
 	if action == "update" {
 		if len(regions) == 0 {
-			regions = meta.Regions
-		}
-		if len(regions) == 0 {
-			return false, fmt.Errorf("%w: first update requires --region", errUsage)
+			regions = make([]string, 0, len(catalog.Regions))
+			for r := range catalog.Regions {
+				regions = append(regions, r)
+			}
+			sort.Strings(regions)
 		}
 		ups, err := catalog.selectEndpoints(regions)
 		if err != nil {

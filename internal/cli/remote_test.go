@@ -128,6 +128,59 @@ func TestRemoteSourcesShareURLsAndRemoveIndependently(t *testing.T) {
 	}
 }
 
+func TestRemoteAllRegions(t *testing.T) {
+	main := writeConfig(t, config.Default())
+	var catalog remoteCatalog
+	catalog.Version = 1
+	catalog.Regions = map[string]string{"cn": "China", "eu": "Europe", "global": "Global"}
+	for _, region := range []string{"cn", "eu", "global"} {
+		catalog.Mirrors = append(catalog.Mirrors, catalogMirror{
+			Name: region, Regions: []string{region},
+			Endpoints: []catalogEndpoint{{Registry: "docker.io", URL: "https://" + region + ".example"}},
+		})
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewEncoder(w).Encode(catalog); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	args := []string{"remote", "update", "--config", main, "--url", server.URL, "--no-reload"}
+	check := func(want int, regions string) {
+		t.Helper()
+		cfg, err := config.Load(main)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(cfg.Registries["docker.io"].Upstreams); got != want {
+			t.Fatalf("expected %d upstreams, got %d", want, got)
+		}
+		files, err := scanRemotes(main)
+		if err != nil || len(files) != 1 || strings.Join(files[0].meta.Regions, ",") != regions {
+			t.Fatalf("unexpected saved regions: %+v (%v)", files, err)
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		flags   []string
+		count   int
+		regions string
+	}{
+		{name: "first update without region", count: 3, regions: "cn,eu,global"},
+		{name: "explicit region filters sites", flags: []string{"--region", "cn"}, count: 1, regions: "cn"},
+		{name: "omitted region clears previous filter", count: 3, regions: "cn,eu,global"},
+		{name: "multiple regions", flags: []string{"--region", "cn,eu"}, count: 2, regions: "cn,eu"},
+		{name: "explicit empty region selects all", flags: []string{"--region", ""}, count: 3, regions: "cn,eu,global"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if code, _, errOut := run(t, append(args, tc.flags...)...); code != 0 {
+				t.Fatal(errOut)
+			}
+			check(tc.count, tc.regions)
+		})
+	}
+}
+
 func TestRemoteBackupFailureDoesNotReplaceCurrent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source.yaml")
