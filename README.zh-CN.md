@@ -18,8 +18,8 @@
 直接使用镜像站耗时 **740.3 秒**：速度约为 **1.46 倍**，总耗时减少 **31.4%**。
 
 | 直接使用镜像站 · 740.3 秒 | 通过 oci-mirror-proxy · 508.0 秒 |
-| --- | --- |
-| ![直接拉取](docs/demos/direct-mirror.gif) | ![通过代理拉取](docs/demos/oci-mirror-proxy.gif) |
+| :---: | :---: |
+| <img src="docs/demos/direct-mirror.gif" alt="直接拉取" width="552" height="363"> | <img src="docs/demos/oci-mirror-proxy.gif" alt="通过代理拉取" width="552" height="363"> |
 | [asciinema 录制](docs/demos/direct-mirror.cast) | [asciinema 录制](docs/demos/oci-mirror-proxy.cast) |
 
 GIF 为加速预览，原始录制保留真实时间。

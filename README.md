@@ -24,8 +24,8 @@ oci-mirror-proxy completed in **508.0 s** versus **740.3 s** directly from the
 mirror: **1.46× as fast**, or **31.4% less time** in this preview.
 
 | Direct mirror · 740.3 s | Through oci-mirror-proxy · 508.0 s |
-| --- | --- |
-| ![Direct mirror pull](docs/demos/direct-mirror.gif) | ![Proxy pull](docs/demos/oci-mirror-proxy.gif) |
+| :---: | :---: |
+| <img src="docs/demos/direct-mirror.gif" alt="Direct mirror pull" width="552" height="363"> | <img src="docs/demos/oci-mirror-proxy.gif" alt="Proxy pull" width="552" height="363"> |
 | [asciinema recording](docs/demos/direct-mirror.cast) | [asciinema recording](docs/demos/oci-mirror-proxy.cast) |
 
 GIFs are time-compressed previews; the original recordings preserve real timing.
