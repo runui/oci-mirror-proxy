@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          case "$RELEASE_TAG" in
+            v*[!a-zA-Z0-9._+-]*|'') echo 'Invalid release tag' >&2; exit 1 ;;
+            v*) ;;
+            *) echo 'Release tags must start with v' >&2; exit 1 ;;
+          esac
+
+      - name: Test
+        run: go test -count=1 ./...
+
+      - name: Build release archives
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            stage="dist/linux-$arch"
+            mkdir -p "$stage"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version=$RELEASE_TAG" \
+              -o "$stage/oci-mirror-proxy" ./cmd/oci-mirror-proxy
+            cp README.md "$stage/"
+            cp examples/config.example.yaml "$stage/"
+            tar -czf "dist/oci-mirror-proxy_${RELEASE_TAG}_linux_${arch}.tar.gz" -C "$stage" .
+          done
+          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          (cd dist && sha256sum --check SHA256SUMS)
+          prerelease=false
+          case "$RELEASE_TAG" in *-*) prerelease=true ;; esac
+          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "$RELEASE_TAG" --generate-notes --prerelease="$prerelease"
+          fi
+          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease="$prerelease"
