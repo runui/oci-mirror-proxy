@@ -84,13 +84,38 @@ your fork, run `remote list`, then remove the old source with
 
 - Official documentation: https://github.com/DaoCloud/public-image-mirror
 - Registry endpoints: `docker.m.daocloud.io`,
-  `ghcr.m.daocloud.io`, `k8s.m.daocloud.io`, and `quay.m.daocloud.io`.
+  `ghcr.m.daocloud.io`, `gcr.m.daocloud.io`, `k8s.m.daocloud.io`, and `quay.m.daocloud.io`.
 - The provider documents allowlists, rate limits, congestion and stale mutable-tag
   responses while synchronization runs. Prefer pinned digests. Public image
   coverage is not unlimited; read the linked policy before use.
-- `cn` is an intended audience label, not an availability guarantee.
-  Other regions currently have no entries. Empty selections are rejected by
-  default; see `remote update --allow-empty` if an empty result is intentional.
+- Regions: `cn`, `apac`, `eu`, `na`.
+
+### ZimaOS Image Mirror
+
+- Provider website: https://www.zimaos.com
+- Docker Hub, GCR, Quay and GHCR endpoints, respectively: `storeproxy.zimaos.com`,
+  `gcr.zimaos.com`, `quay.zimaos.com`, `ghcr.zimaos.com`.
+- Regions: `cn`, `apac`, `eu`, `na`.
+
+### 1ms Image Mirror
+
+- Provider website: https://1ms.run
+- Docker Hub, GCR, Quay and GHCR endpoints, respectively: `docker.1ms.run`,
+  `gcr.1ms.run`, `quay.1ms.run`, `ghcr.1ms.run`.
+- Regions: `cn`, `apac`, `eu`, `na`.
+
+### 1Panel Docker Hub Mirror
+
+- Provider website: https://1panel.cn
+- Registry endpoint: `docker.1panel.live`.
+- Region: `cn`. Access is restricted to mainland China.
+
+### Region verification
+
+Last checked on 2026-10-21 with [Globalping](https://globalping.io/).
+See the [measurement record](availability-2026-10-21.md) for details.
+Region labels reflect sampled Registry reachability, not guaranteed image coverage,
+successful pulls or ongoing availability.
 
 ## Project contributors
 

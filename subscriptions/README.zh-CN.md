@@ -75,11 +75,36 @@ oci-mirror-proxy remote update \
 
 - 官方文档：https://github.com/DaoCloud/public-image-mirror
 - Registry 端点：`docker.m.daocloud.io`、`ghcr.m.daocloud.io`、
-  `k8s.m.daocloud.io`、`quay.m.daocloud.io`。
+  `gcr.m.daocloud.io`、`k8s.m.daocloud.io`、`quay.m.daocloud.io`。
 - 运营方存在白名单、限流、拥挤和同步期间可变 tag 旧缓存等限制，
   公共镜像覆盖范围有限，使用前请阅读官方说明，并优先使用固定摘要。
-- `cn` 表示服务适用区域，**不代表实时可用性保证**。当前其他区域暂未收录条目；
-  空结果默认拒绝，如确需保存空结果，可使用 `remote update --allow-empty`。
+- 区域：`cn`、`apac`、`eu`、`na`。
+
+### ZimaOS Image Mirror
+
+- 运营方网站：https://www.zimaos.com
+- 分别代理 Docker Hub、GCR、Quay 和 GHCR：`storeproxy.zimaos.com`、
+  `gcr.zimaos.com`、`quay.zimaos.com`、`ghcr.zimaos.com`。
+- 区域：`cn`、`apac`、`eu`、`na`。
+
+### 1ms Image Mirror
+
+- 运营方网站：https://1ms.run
+- 分别代理 Docker Hub、GCR、Quay 和 GHCR：`docker.1ms.run`、
+  `gcr.1ms.run`、`quay.1ms.run`、`ghcr.1ms.run`。
+- 区域：`cn`、`apac`、`eu`、`na`。
+
+### 1Panel Docker Hub Mirror
+
+- 运营方网站：https://1panel.cn
+- Registry 端点：`docker.1panel.live`。
+- 区域：`cn`，仅限中国大陆访问。
+
+### 区域验证
+
+最近验证日期：2026-10-21，使用 [Globalping](https://globalping.io/)。
+详细结果见[探测记录](availability-2026-10-21.md)。
+区域标签仅反映抽样网络下的 Registry 可达性，不保证镜像覆盖、完整拉取或持续可用性。
 
 ## 项目贡献者
 

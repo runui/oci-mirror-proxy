@@ -11,12 +11,43 @@
     {
       "name": "DaoCloud Public Image Mirror",
       "website": "https://github.com/DaoCloud/public-image-mirror",
-      "regions": ["cn"],
+      "regions": ["cn", "apac", "eu", "na"],
       "endpoints": [
         {"registry": "docker.io", "url": "https://docker.m.daocloud.io"},
         {"registry": "ghcr.io", "url": "https://ghcr.m.daocloud.io"},
+        {"registry": "gcr.io", "url": "https://gcr.m.daocloud.io"},
         {"registry": "registry.k8s.io", "url": "https://k8s.m.daocloud.io"},
         {"registry": "quay.io", "url": "https://quay.m.daocloud.io"}
+      ]
+    },
+    {
+      "name": "ZimaOS Image Mirror",
+      "website": "https://www.zimaos.com",
+      "regions": ["cn", "apac", "eu", "na"],
+      "endpoints": [
+        {"registry": "docker.io", "url": "https://storeproxy.zimaos.com"},
+        {"registry": "gcr.io", "url": "https://gcr.zimaos.com"},
+        {"registry": "quay.io", "url": "https://quay.zimaos.com"},
+        {"registry": "ghcr.io", "url": "https://ghcr.zimaos.com"}
+      ]
+    },
+    {
+      "name": "1ms Image Mirror",
+      "website": "https://1ms.run",
+      "regions": ["cn", "apac", "eu", "na"],
+      "endpoints": [
+        {"registry": "docker.io", "url": "https://docker.1ms.run"},
+        {"registry": "gcr.io", "url": "https://gcr.1ms.run"},
+        {"registry": "quay.io", "url": "https://quay.1ms.run"},
+        {"registry": "ghcr.io", "url": "https://ghcr.1ms.run"}
+      ]
+    },
+    {
+      "name": "1Panel Docker Hub Mirror",
+      "website": "https://1panel.cn",
+      "regions": ["cn"],
+      "endpoints": [
+        {"registry": "docker.io", "url": "https://docker.1panel.live"}
       ]
     }
   ]
