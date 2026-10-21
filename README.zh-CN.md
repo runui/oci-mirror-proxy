@@ -89,6 +89,7 @@ dist/oci-mirror-proxy doctor                  # 检查代理、dockerd 和配置
 ```sh
 oci-mirror-proxy remote update --region cn
 oci-mirror-proxy remote list
+oci-mirror-proxy remote show --url https://example.com/mirrors.json --region cn
 oci-mirror-proxy remote update --all
 ```
 

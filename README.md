@@ -109,6 +109,7 @@ complete configuration with every option explained.
 ```sh
 oci-mirror-proxy remote update --url https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/subscriptions/mirrors.json --region cn
 oci-mirror-proxy remote list
+oci-mirror-proxy remote show --url https://example.com/mirrors.json --region cn
 oci-mirror-proxy remote update --all
 ```
 

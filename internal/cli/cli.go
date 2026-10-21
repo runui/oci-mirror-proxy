@@ -90,7 +90,7 @@ Upstreams:
   upstream list|add|enable|disable|remove
 
 Remote mirror catalogs:
-  remote list|update|remove
+  remote list|show|update|remove
 
 Other:
   version              print the version

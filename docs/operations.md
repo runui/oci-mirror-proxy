@@ -4,6 +4,7 @@
 
 ## Commands
 
+Inspect a remote catalog without subscribing using `remote show [--url U] [--region cn]`.
 Remote mirror catalogs are managed by `remote list`, `remote update [--url U]
 --region cn`, `remote update --all`, and `remote remove --url U`. Updates/removal
 support `--dry-run` and previous-result backups; see [remote catalogs](remotes.md).

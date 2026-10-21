@@ -110,13 +110,6 @@ your fork, run `remote list`, then remove the old source with
 - Registry endpoint: `docker.1panel.live`.
 - Region: `cn`. Access is restricted to mainland China.
 
-### Region verification
-
-Last checked on 2026-10-21 with [Globalping](https://globalping.io/).
-See the [measurement record](availability-2026-10-21.md) for details.
-Region labels reflect sampled Registry reachability, not guaranteed image coverage,
-successful pulls or ongoing availability.
-
 ## Project contributors
 
 Thank you to everyone improving the project and its mirror catalog!

@@ -31,10 +31,37 @@ multiple labels select their union. `global` is not included automatically.
 `--all` updates configured sources with their respective saved selections and
 cannot be combined with `--url` or `--region`.
 
-All commands accept `--config`. Update/remove accept `--dry-run`, `--no-reload`,
+List/update/remove accept `--config`. Update/remove accept `--dry-run`, `--no-reload`,
 and `--admin-socket`. A dry run previews changes without saving them.
 An empty selection is rejected unless `update --allow-empty` is explicit.
 `remove` always requires `--url`. There is no background updater.
+
+## Inspect a catalog
+
+`remote list` lists locally configured sources. Use `remote show` to download a
+catalog and inspect its mirror sites without subscribing or creating local files:
+
+```sh
+oci-mirror-proxy remote show
+oci-mirror-proxy remote show --url https://example.com/mirrors.json
+oci-mirror-proxy remote show --url https://example.com/mirrors.json --region cn,apac
+```
+
+Omitting `--url` uses the built-in default catalog. Each endpoint gets a row with
+the site's name, complete region labels, registry, endpoint URL, and website
+(`-` when absent). Sites and endpoints retain catalog order; identical endpoints
+from different sites remain visible. Website query strings are redacted.
+
+Omitting `--region` or passing an empty value shows all sites. Multiple regions
+select their union; a matching site shows all its endpoints. Unknown region labels
+are errors and list the available labels. Empty results print `no matching mirrors`
+and exit successfully.
+
+`show` accepts only `--url`, `--region`, and help flags. It needs no local
+configuration or running proxy, writes no configuration, and never reloads the
+service. It displays catalog contents, not local enablement or endpoint health;
+mirror endpoints and websites are not contacted. Download and catalog validation
+rules are the same as for updates.
 
 ## Files, atomic replacement, and backup
 

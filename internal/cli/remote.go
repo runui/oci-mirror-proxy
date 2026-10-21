@@ -68,9 +68,13 @@ func fetchCatalog(ctx context.Context, raw string) (remoteCatalog, error) {
 
 func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("%w: want remote list, update or remove", errUsage)
+		return fmt.Errorf("%w: want remote list, show, update or remove", errUsage)
 	}
 	action := args[0]
+	// Inspect catalogs before resolving configuration: show needs no local files.
+	if action == "show" {
+		return cmdRemoteShow(ctx, args[1:], stdout, stderr)
+	}
 	if action != "list" && action != "update" && action != "remove" {
 		return fmt.Errorf("%w: unknown remote action %q", errUsage, action)
 	}

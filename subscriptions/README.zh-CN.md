@@ -100,12 +100,6 @@ oci-mirror-proxy remote update \
 - Registry 端点：`docker.1panel.live`。
 - 区域：`cn`，仅限中国大陆访问。
 
-### 区域验证
-
-最近验证日期：2026-10-21，使用 [Globalping](https://globalping.io/)。
-详细结果见[探测记录](availability-2026-10-21.md)。
-区域标签仅反映抽样网络下的 Registry 可达性，不保证镜像覆盖、完整拉取或持续可用性。
-
 ## 项目贡献者
 
 感谢每一位完善项目和镜像目录的贡献者！

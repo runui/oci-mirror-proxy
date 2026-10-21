@@ -25,10 +25,33 @@ https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/subscriptions/mirro
 不自动包含在其他区域内。`--all` 更新已经配置的源，保留各源独立的区域选择，
 与 `--url`、`--region` 互斥。
 
-所有命令支持 `--config`。更新、删除支持 `--dry-run`、`--no-reload` 和
+`list/update/remove` 支持 `--config`。更新、删除支持 `--dry-run`、`--no-reload` 和
 `--admin-socket`。预览只显示变更，不保存文件。筛选结果为空时默认拒绝，
 需要显式指定 `update --allow-empty`。`remove` 必须指定 `--url`。
 不提供后台自动更新任务。
+
+## 查看远端目录
+
+`remote list` 列出本地已配置的订阅源。要查看远端有哪些镜像站，无须先订阅，
+可直接下载目录查看：
+
+```sh
+oci-mirror-proxy remote show
+oci-mirror-proxy remote show --url https://example.com/mirrors.json
+oci-mirror-proxy remote show --url https://example.com/mirrors.json --region cn,apac
+```
+
+省略 `--url` 时使用内置默认订阅。每个镜像端点一行，显示站点名称、完整区域标签、
+Registry、端点 URL 和官网；没有官网时显示 `-`，官网查询参数会隐藏。
+站点和端点保留目录原有顺序，不合并不同站点声明的相同端点。
+
+省略 `--region` 或传空字符串时显示全部站点；多个区域取并集，匹配的站点展示其全部端点。
+区域不存在时返回错误并列出可用标签。空目录或筛选后无结果时显示
+`no matching mirrors`，正常退出。
+
+`show` 仅接受 `--url`、`--region` 和帮助参数，不依赖本地配置或运行中的代理，
+不创建配置文件、不触发重载。输出只代表远端目录内容，不代表本地启用状态或站点健康状态，
+也不会访问镜像端点或官网。下载限制和目录校验规则与更新命令相同。
 
 ## 文件、原子更新与备份
 

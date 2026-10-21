@@ -4,6 +4,7 @@
 
 ## 命令
 
+使用 `remote show [--url U] [--region cn]` 查看远端目录，无须先订阅。
 远端源使用 `remote list`、`remote update [--url U] --region cn`、
 `remote update --all`、`remote remove --url U` 管理；支持 `--dry-run` 和上一次结果备份，
 详见[远端订阅](remotes.md)。`upstream add` 无需 `--id`，启用/禁用/删除可用 `--url`
