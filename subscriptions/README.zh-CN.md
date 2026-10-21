@@ -49,6 +49,26 @@
 基础地址，而非网站首页或某个镜像的完整地址。请提供运营方官方说明，并在本 README
 补充白名单、限流、认证要求或 tag 缓存等使用注意事项，不要提交密码、查询令牌或私有端点。
 
+### 本地格式化和校验 JSON
+
+本地格式化工具需要 Node.js 20.19+（20.x）或 22.12+ 以及 npm。在仓库根目录执行：
+
+```sh
+npm ci
+npm run format
+npm run format:check
+npm run validate
+npm run check
+```
+
+格式化命令仅处理 `subscriptions/**/*.json`。`npm run validate` 使用 `schema.json`
+校验 `mirrors.json`；`npm run check` 同时执行格式检查和 Schema 校验。
+`npm ci` 还会安装 Git pre-commit hook，使用 Oxfmt 检查已暂存的订阅 JSON 文件，
+并在订阅 JSON（包括 Schema）变动时，使用暂存的 Schema 校验暂存的目录数据。
+hook 不会自动修复或暂存文件。检查失败时，修正报告的错误（格式问题可执行
+`npm run format`），检查并暂存修正后的文件，再重新提交。
+构建和运行 Go 应用不需要 Node.js。
+
 ### 订阅自己的 Fork
 
 无需等待 PR 合并，也可以直接订阅自己的目录。提交并推送 `mirrors.json` 后，

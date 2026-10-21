@@ -56,6 +56,29 @@ not web portals or individual image URLs. Link the operator's official documenta
 and describe allowlists, rate limits, authentication requirements, or tag-cache
 behavior in this README. Do not add passwords, query tokens, or private endpoints.
 
+### Format and validate JSON locally
+
+Local formatting tools require Node.js 20.19+ (20.x) or 22.12+ and npm. From the
+repository root, run:
+
+```sh
+npm ci
+npm run format
+npm run format:check
+npm run validate
+npm run check
+```
+
+Formatting commands only target `subscriptions/**/*.json`. `npm run validate`
+validates `mirrors.json` against `schema.json`; `npm run check` runs both formatting
+and Schema checks. `npm ci` also installs a Git pre-commit hook that checks staged
+subscription JSON files with Oxfmt and validates the staged catalog against the
+staged Schema whenever subscription JSON changes, including Schema changes.
+The hook does not fix or stage files automatically. If a check fails, correct the
+reported errors (use `npm run format` for formatting), review and stage the
+corrected files, then commit again.
+Node.js is not needed to build or run the Go application.
+
 ### Use your fork as a catalog
 
 You can use your own catalog without waiting for a PR to be merged. Commit and

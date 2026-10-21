@@ -1,0 +1,78 @@
+name: Subscription Lint Comment
+
+on:
+  workflow_run:
+    workflows: ['Subscription Lint']
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: subscriptions-lint-comment-${{ github.event.workflow_run.head_branch }}-${{ github.event.workflow_run.head_repository.id }}
+  cancel-in-progress: false
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # This privileged workflow never checks out or executes pull request code.
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const { owner, repo } = context.repo;
+            const marker = '<!-- subscriptions-lint-result -->';
+            const candidates = run.pull_requests.length
+              ? run.pull_requests
+              : await github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit, {
+                  owner, repo, commit_sha: run.head_sha, per_page: 100,
+                });
+
+            for (const candidate of candidates) {
+              const { data: pr } = await github.rest.pulls.get({
+                owner, repo, pull_number: candidate.number,
+              });
+              if (pr.state !== 'open' || pr.base.repo.full_name !== `${owner}/${repo}` || pr.head.sha !== run.head_sha) {
+                continue;
+              }
+
+              // An older run must not overwrite the result of a newer run or rerun.
+              const { data: latest } = await github.rest.actions.getWorkflowRun({
+                owner, repo, run_id: run.id,
+              });
+              if (latest.run_attempt !== run.run_attempt) continue;
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner, repo, workflow_id: run.workflow_id, head_sha: run.head_sha,
+                event: 'pull_request', per_page: 100,
+              });
+              if (runs.some((other) => other.id > run.id)) continue;
+
+              const passed = run.conclusion === 'success';
+              const body = [
+                marker,
+                `### Subscription lint: ${passed ? 'passed' : 'failed'}`,
+                '',
+                'Checks: subscription JSON formatting (Oxfmt) and catalog Schema validation (Ajv).',
+                '',
+                passed
+                  ? 'All checks passed.'
+                  : 'Review the workflow logs for details. Run `npm ci` and `npm run check` locally; use `npm run format` to fix formatting.',
+                '',
+                `[View workflow logs](${run.html_url})`,
+              ].join('\n');
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100,
+              });
+              const existing = comments.find((comment) =>
+                comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker));
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+              }
+            }

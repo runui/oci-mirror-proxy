@@ -1,0 +1,4 @@
+if ! npm exec --no -- lint-staged; then
+	printf '%s\n' 'Subscription checks failed. Run npm run check for details; use npm run format to fix formatting, then review and stage the corrected files.' >&2
+	exit 1
+fi

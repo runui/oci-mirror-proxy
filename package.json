@@ -1,0 +1,27 @@
+{
+  "name": "oci-mirror-proxy-tools",
+  "private": true,
+  "scripts": {
+    "format": "oxfmt --write \"subscriptions/**/*.json\"",
+    "format:check": "oxfmt --check \"subscriptions/**/*.json\"",
+    "validate": "node scripts/validate-subscriptions.mjs",
+    "check": "npm run format:check && npm run validate",
+    "prepare": "husky"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "husky": "9.1.7",
+    "lint-staged": "16.4.0",
+    "oxfmt": "0.74.0"
+  },
+  "lint-staged": {
+    "subscriptions/**/*.json": [
+      "oxfmt --check",
+      "node scripts/validate-subscriptions.mjs --staged"
+    ]
+  }
+}

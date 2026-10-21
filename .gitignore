@@ -9,6 +9,9 @@
 *.out
 coverage.html
 
+# Node.js development tools
+node_modules/
+
 # Editor and OS files
 .DS_Store
 *.swp
