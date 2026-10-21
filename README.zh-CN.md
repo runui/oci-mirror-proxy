@@ -12,6 +12,18 @@
 
 支持 dockerd 的两种镜像存储后端：containerd（`hosts.toml`）和传统 graphdriver（`daemon.json`，仅限 docker.io）。
 
+## 预览
+
+本次预览中通过本项目耗时 **508.0 秒**，
+直接使用镜像站耗时 **740.3 秒**：速度约为 **1.46 倍**，总耗时减少 **31.4%**。
+
+| 直接使用镜像站 · 740.3 秒 | 通过 oci-mirror-proxy · 508.0 秒 |
+| --- | --- |
+| ![直接拉取](docs/demos/direct-mirror.gif) | ![通过代理拉取](docs/demos/oci-mirror-proxy.gif) |
+| [asciinema 录制](docs/demos/direct-mirror.cast) | [asciinema 录制](docs/demos/oci-mirror-proxy.cast) |
+
+GIF 为加速预览，原始录制保留真实时间。
+
 ## 项目状态
 
 支持的功能：用于拉取的仓库 API、故障转移、熔断、对冲请求、blob 断点续传、令牌和 Basic 认证、管理套接字、配置重载，以及支持还原的 dockerd 配置管理。

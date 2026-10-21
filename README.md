@@ -18,6 +18,18 @@ mirror support lacks:
 It supports both dockerd image stores: containerd (`hosts.toml`) and the classic
 graphdriver store (`daemon.json`, docker.io only).
 
+## Preview
+
+oci-mirror-proxy completed in **508.0 s** versus **740.3 s** directly from the
+mirror: **1.46× as fast**, or **31.4% less time** in this preview.
+
+| Direct mirror · 740.3 s | Through oci-mirror-proxy · 508.0 s |
+| --- | --- |
+| ![Direct mirror pull](docs/demos/direct-mirror.gif) | ![Proxy pull](docs/demos/oci-mirror-proxy.gif) |
+| [asciinema recording](docs/demos/direct-mirror.cast) | [asciinema recording](docs/demos/oci-mirror-proxy.cast) |
+
+GIFs are time-compressed previews; the original recordings preserve real timing.
+
 ## Status
 
 Supported features: the registry API for pulls, failover, circuit breaking,
