@@ -14,6 +14,8 @@ import (
 type StoreKind string
 
 const (
+	// StoreDesktop uses Desktop's Engine settings regardless of its image store.
+	StoreDesktop StoreKind = "desktop"
 	// StoreContainerd is the containerd image store. Mirrors are configured per
 	// registry with hosts.toml files.
 	StoreContainerd StoreKind = "containerd"
@@ -41,6 +43,9 @@ type File struct {
 	Path    string
 	Content []byte
 	Mode    fs.FileMode
+	// CheckBefore binds a merge to the bytes it read, so an intervening edit is
+	// not silently overwritten. Nil means the renderer did not request a check.
+	CheckBefore *string
 }
 
 // Plan is the complete set of changes a renderer wants to make.

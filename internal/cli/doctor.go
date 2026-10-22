@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/runui/oci-mirror-proxy/internal/config"
 	"github.com/runui/oci-mirror-proxy/internal/daemonconf"
@@ -19,8 +18,11 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	paths, err := flags.resolve()
+	paths, err := flags.resolve(ctx)
 	if err != nil {
+		return err
+	}
+	if err := flags.adapter.Validate(ctx); err != nil {
 		return err
 	}
 	cfgPath, err := resolveConfigPath(flags.configPath)
@@ -34,18 +36,19 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 
 	info, infoErr := daemonconf.FetchInfo(ctx, paths.DockerSocket)
 	var expected []daemonconf.File
-	if store, err := storeForDoctor(flags.store, info, infoErr); err == nil {
-		if plan, err := renderer(store, paths).Render(targetFor(cfg), os.ReadFile); err == nil {
+	if _, err := storeForDoctor(flags.store, info, infoErr); err == nil {
+		if plan, err := flags.adapter.Render(ctx, targetFor(cfg), flags.store); err == nil {
 			expected = plan.Files
 			printWarnings(stderr, plan)
 		}
 	}
 
 	checks := daemonconf.Diagnose(ctx, daemonconf.DiagnoseInput{
-		ProxyURL: cfg.ProxyURL(),
-		Info:     info,
-		InfoErr:  infoErr,
-		Expected: expected,
+		ProxyURL:       cfg.ProxyURL(),
+		Info:           info,
+		InfoErr:        infoErr,
+		Expected:       expected,
+		MirrorSettings: flags.adapter.MergesConfig(),
 	})
 	failed := 0
 	for _, c := range checks {

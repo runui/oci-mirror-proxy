@@ -4,10 +4,11 @@
 
 ## Requirements and image
 
-Use Linux Docker Engine with the Compose plugin. The supplied Compose file uses
-host networking so the host's dockerd can reach `127.0.0.1:24817`. Docker Desktop
-and rootless networking need additional network configuration; they are not the
-default deployment target. See [rootless dockerd](operations.md#rootless-dockerd).
+Use a local Docker Engine or Docker Desktop on macOS with the Compose plugin.
+The supplied Compose file uses bridge networking and publishes only
+`127.0.0.1:24817`. See [automatic Docker integration](docker-integration.md) for
+configuration, activation and recovery. Rootless networking may require additional
+configuration; see [rootless dockerd](operations.md#rootless-dockerd).
 
 Images are available from the project's Gitea container registry:
 
@@ -33,7 +34,7 @@ From the repository root:
 mkdir -p config
 cp examples/config.docker.yaml config/config.yaml
 # The non-root container must be able to atomically replace the config file.
-sudo chown -R 65532:65532 config
+sudo chown -R 65532:65532 config  # Linux only; on macOS keep your user ownership
 sudo chmod 700 config
 sudo chmod 600 config/config.yaml
 docker compose pull
@@ -88,23 +89,25 @@ on the host using the [installation instructions](../README.md#installation),
 then use the same configuration to preview and apply the host integration:
 
 ```sh
-sudo oci-mirror-proxy dockerd plan --config "$PWD/config/config.yaml"
-sudo oci-mirror-proxy dockerd apply --config "$PWD/config/config.yaml"
-sudo oci-mirror-proxy doctor --config "$PWD/config/config.yaml"
+oci-mirror-proxy dockerd plan --config "$PWD/config/config.yaml"
+oci-mirror-proxy dockerd apply --config "$PWD/config/config.yaml"
+oci-mirror-proxy doctor --config "$PWD/config/config.yaml"
 docker pull hello-world
 ```
+
+On Linux, prefix configuration commands with `sudo` when required. On macOS,
+run as your normal user and add `--restart` to `dockerd apply` when ready to
+interrupt Docker and activate the change.
 
 The host CLI does not need the container's private admin socket for these commands.
 Do not start a second proxy service on the host; if using the install script, omit
 `--service`. For manual configuration or rollback, see
 [operations](operations.md#configure-dockerd).
 
-The default listener is loopback-only because the registry API has no
-authentication. Changing it to `0.0.0.0` with host networking exposes it to the
-network. For bridge networking, override `network_mode`, publish the port only on
-host loopback, change the container listener to `0.0.0.0:24817`, and keep
-`advertise` set to an address reachable by dockerd; do not just add `ports` to a
-host-network service.
+The container listens on `0.0.0.0`, but its published port is restricted to host
+loopback because the registry API has no authentication. Keep `advertise` set to
+an address reachable by dockerd. Do not publish the port on all host interfaces.
+Other containers sharing its network can still reach the registry.
 
 For authenticated mirrors, explicitly pass referenced environment variables via
 Compose `environment` (a `.env` entry alone does not inject them into the

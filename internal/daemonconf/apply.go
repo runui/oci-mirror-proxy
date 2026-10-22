@@ -1,6 +1,7 @@
 package daemonconf
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,10 +34,13 @@ type State struct {
 // FileState is the original condition of one file. It is captured the first time
 // Apply touches the file, and kept until Revert.
 type FileState struct {
-	Path    string      `json:"path"`
-	Existed bool        `json:"existed"`
-	Backup  string      `json:"backup,omitempty"`
-	Mode    fs.FileMode `json:"mode,omitempty"`
+	// WrittenHash detects edits made after apply. Older state files omit it and
+	// retain their historical behavior so existing installations remain revertible.
+	WrittenHash string      `json:"written_hash,omitempty"`
+	Path        string      `json:"path"`
+	Existed     bool        `json:"existed"`
+	Backup      string      `json:"backup,omitempty"`
+	Mode        fs.FileMode `json:"mode,omitempty"`
 }
 
 // Applier writes plans to disk and records what it changed.
@@ -51,13 +55,42 @@ type Applier struct {
 // time it is touched. A file that exists but is not yet managed is refused unless
 // force is set, so user configuration is never overwritten silently.
 func (a Applier) Apply(plan Plan, force bool) (State, error) {
+	unlock, err := a.lock()
+	if err != nil {
+		return State{}, err
+	}
+	defer unlock()
 	prev, err := a.loadState()
 	if err != nil {
 		return State{}, err
 	}
 	known := make(map[string]FileState, len(prev.Files))
 	for _, f := range prev.Files {
+		if err := unchanged(f); err != nil {
+			return State{}, err
+		}
 		known[f.Path] = f
+	}
+	// Validate ownership for every target before writing the first file. Backups
+	// alone cannot make a later ownership failure safe for multi-file plans.
+	for _, f := range plan.Files {
+		if f.CheckBefore != nil {
+			data, err := os.ReadFile(f.Path)
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return State{}, err
+			}
+			if string(data) != *f.CheckBefore {
+				return State{}, fmt.Errorf("configuration %s changed while planning; retry the operation", f.Path)
+			}
+		}
+		if _, managed := known[f.Path]; managed {
+			continue
+		}
+		if _, err := os.Stat(f.Path); err == nil && !force {
+			return State{}, fmt.Errorf("%w: %s", ErrUnmanaged, f.Path)
+		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return State{}, err
+		}
 	}
 
 	now := a.now()
@@ -81,6 +114,7 @@ func (a Applier) Apply(plan Plan, force bool) (State, error) {
 				return State{}, err
 			}
 		}
+		rec.WrittenHash = fmt.Sprintf("%x", sha256.Sum256(f.Content))
 		next.Files = append(next.Files, rec)
 		if err := fsutil.WriteFileAtomic(f.Path, f.Content, fileMode(f.Mode)); err != nil {
 			return State{}, fmt.Errorf("write %s: %w", f.Path, err)
@@ -107,12 +141,24 @@ func (a Applier) Apply(plan Plan, force bool) (State, error) {
 // when they did not exist before. Empty directories that Apply created are removed,
 // and the state file is deleted. Backups are kept so the operator can inspect them.
 func (a Applier) Revert() (State, error) {
+	unlock, err := a.lock()
+	if err != nil {
+		return State{}, err
+	}
+	defer unlock()
 	st, err := a.loadState()
 	if err != nil {
 		return State{}, err
 	}
 	if st.AppliedAt.IsZero() {
 		return State{}, ErrNothingToRevert
+	}
+	// Preflight every file before restoring any, so a conflict does not cause a
+	// partially reverted installation. --force never discards concurrent edits.
+	for _, f := range st.Files {
+		if err := unchanged(f); err != nil {
+			return st, err
+		}
 	}
 	var errs []error
 	for _, f := range st.Files {
@@ -131,6 +177,35 @@ func (a Applier) Revert() (State, error) {
 		return st, fmt.Errorf("remove state file: %w", err)
 	}
 	return st, nil
+}
+
+func unchanged(f FileState) error {
+	if f.WrittenHash == "" {
+		return nil
+	}
+	data, err := os.ReadFile(f.Path)
+	if err != nil {
+		return fmt.Errorf("inspect managed file %s: %w", f.Path, err)
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(data)) != f.WrittenHash {
+		return fmt.Errorf("managed file %s changed externally; refusing to overwrite it", f.Path)
+	}
+	return nil
+}
+
+func (a Applier) lock() (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(a.StatePath), 0o700); err != nil {
+		return nil, err
+	}
+	path := a.StatePath + ".lock"
+	// Exclusive creation works across local processes on both supported systems.
+	// A crash leaves a visible lock rather than risking concurrent recovery.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("acquire integration lock %s (remove only after confirming no operation is running): %w", path, err)
+	}
+	f.Close()
+	return func() { _ = os.Remove(path) }, nil
 }
 
 // capture records the original condition of path before it is replaced.

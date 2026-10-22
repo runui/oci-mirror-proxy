@@ -41,7 +41,8 @@ Not supported: push, a local blob cache, keychain secret backends, and metrics e
 ## Requirements
 
 - Go 1.26 or newer, to build.
-- Linux with dockerd for real use. Rootless dockerd needs the listen address
+- A local Docker Engine on Linux or Docker Desktop on macOS. See
+  [automatic Docker integration](docs/docker-integration.md). Rootless dockerd needs the listen address
   reachable from its network namespace, which is left to the operator (see
   [docs/operations.md](docs/operations.md#rootless-dockerd)).
 
@@ -89,10 +90,10 @@ Restart a running proxy manually after updating without `--service`.
 
 ## Docker deployment
 
-Linux Docker Engine users can deploy with [docker-compose.yaml](docker-compose.yaml). Prepare
+Docker Engine and macOS Docker Desktop users can deploy with [docker-compose.yaml](docker-compose.yaml). Prepare
 the writable configuration directory, then run `docker compose up -d --no-build`.
-The image supports amd64/arm64 and defaults to host networking with a loopback-only
-listener, without mounting the Docker socket. See [Docker deployment](docs/docker.md)
+The image supports amd64/arm64 and uses bridge networking with a host-loopback-only
+published port, without mounting the Docker socket. See [Docker deployment](docs/docker.md)
 for setup, local builds, and host dockerd configuration.
 
 ## Quick start

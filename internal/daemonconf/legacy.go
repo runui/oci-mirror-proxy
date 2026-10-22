@@ -84,6 +84,9 @@ func decodeDaemonConfig(data []byte) (map[string]json.RawMessage, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("not valid JSON, refusing to modify it: %w", err)
 	}
+	if cfg == nil {
+		return nil, fmt.Errorf("daemon configuration must be a JSON object")
+	}
 	return cfg, nil
 }
 

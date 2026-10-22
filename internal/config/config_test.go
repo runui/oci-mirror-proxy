@@ -208,8 +208,10 @@ func TestDockerConfigIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Docker config is invalid: %v", err)
 	}
-	if cfg.Listen != DefaultListen || cfg.ProxyURL() != "http://"+DefaultListen {
-		t.Fatalf("Docker config must remain loopback-only: %+v", cfg)
+	// The listener is inside a bridge container; only Compose's published port
+	// is host-loopback-only. Advertising the wildcard would break daemon access.
+	if cfg.Listen != "0.0.0.0:24817" || cfg.ProxyURL() != "http://"+DefaultListen {
+		t.Fatalf("Docker config must listen in the container and advertise host loopback: %+v", cfg)
 	}
 	if cfg.Admin.Socket != "/run/oci-mirror-proxy/admin.sock" {
 		t.Fatalf("unexpected Docker admin socket: %q", cfg.Admin.Socket)

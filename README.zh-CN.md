@@ -33,7 +33,7 @@ GIF 为加速预览，原始录制保留真实时间。
 ## 环境要求
 
 - 构建需要 Go 1.26 或更新版本。
-- 实际使用需要 Linux 和 dockerd。对于 rootless dockerd，操作者需要确保其网络命名空间能够访问代理监听地址，详见[运维指南](docs/zh-CN/operations.md#rootless-dockerd)。
+- 支持本机 Linux Docker Engine 或 macOS Docker Desktop。对于 rootless dockerd，操作者需要确保其网络命名空间能够访问代理监听地址，详见[运维指南](docs/zh-CN/operations.md#rootless-dockerd)。
 
 ## 安装
 
@@ -71,9 +71,9 @@ curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.
 
 ## Docker 部署
 
-Linux Docker Engine 用户可通过 [docker-compose.yaml](docker-compose.yaml) 部署。准备好可写的
+Docker Engine 和 macOS Docker Desktop 用户可通过 [docker-compose.yaml](docker-compose.yaml) 部署。准备好可写的
 配置目录后，执行 `docker compose up -d --no-build`。镜像支持 amd64/arm64，默认
-采用 host 网络并仅监听回环地址，无需挂载 Docker socket。配置初始化、本地构建、
+采用 bridge 网络并仅向主机回环地址发布端口，无需挂载 Docker socket。配置初始化、本地构建、
 宿主机 dockerd 接入方法见 [Docker 部署指南](docs/zh-CN/docker.md)。
 
 ## 快速开始
@@ -123,3 +123,5 @@ CLI 默认更新仓库的 JSON 目录，也支持自定义 `--url`。每个源�
 - 客户端的 `Authorization` 请求头不会被转发到上游。
 - 管理套接字通过文件权限保护：目录权限为 `0700`，套接字权限为 `0600`。
 - `dockerd apply` 写入文件前会先备份，`revert` 会恢复备份。除非指定 `--force`，否则不会覆盖非本工具创建的文件。
+
+自动配置、生效及撤销参见[自动配置 Docker](docs/zh-CN/docker-integration.md)。

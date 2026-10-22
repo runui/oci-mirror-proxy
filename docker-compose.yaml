@@ -5,8 +5,9 @@ services:
       context: .
       args:
         VERSION: ${VERSION:-dev}
-    # Linux host networking lets dockerd reach the loopback-only listener.
-    network_mode: host
+    # Bridge publishing works for both local Engine and Docker Desktop.
+    ports:
+      - "127.0.0.1:24817:24817"
     restart: unless-stopped
     read_only: true
     cap_drop:

@@ -17,8 +17,9 @@ const containerdDriverPrefix = "io.containerd.snapshotter"
 
 // Info is the subset of dockerd's GET /info response that this package reads.
 type Info struct {
-	DriverStatus   [][2]string     `json:"DriverStatus"`
-	RegistryConfig *RegistryConfig `json:"RegistryConfig"`
+	OperatingSystem string          `json:"OperatingSystem"`
+	DriverStatus    [][2]string     `json:"DriverStatus"`
+	RegistryConfig  *RegistryConfig `json:"RegistryConfig"`
 }
 
 // RegistryConfig is the registry section of dockerd's /info response.

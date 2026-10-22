@@ -4,9 +4,10 @@
 
 ## 环境要求与镜像
 
-推荐使用 Linux Docker Engine 及 Compose 插件。提供的 Compose 文件采用 host
-网络，使宿主机 dockerd 能访问 `127.0.0.1:24817`。Docker Desktop 和 rootless
-网络需要额外配置，不属于默认部署目标，参见 [rootless dockerd](operations.md#rootless-dockerd)。
+支持本机 Linux Docker Engine 或 macOS Docker Desktop 及 Compose 插件。
+统一 Compose 使用 bridge 网络，仅发布 `127.0.0.1:24817`。
+配置、生效和恢复参见[自动配置 Docker](docker-integration.md)。
+rootless 网络可能需要额外配置。
 
 镜像可从项目的 Gitea 容器仓库获取：
 
@@ -90,10 +91,9 @@ docker pull hello-world
 这些宿主机命令不需要访问容器内私有的管理套接字。不要再在宿主机启动第二个代理服务；
 使用安装脚本时不加 `--service`。手动配置与回滚方法见[运维指南](operations.md#配置-dockerd)。
 
-仓库 API 不提供认证，因此默认仅监听回环地址。在 host 网络下改为监听 `0.0.0.0`
-会将接口暴露到网络。若改用 bridge 网络，需覆盖 `network_mode`，仅向宿主机回环
-地址发布端口，将容器内的监听地址改为 `0.0.0.0:24817`，并让 `advertise` 保持为
-dockerd 可达的地址；不能直接给 host 网络服务添加 `ports`。
+容器内监听 `0.0.0.0`，宿主机仅发布回环端口，避免将无认证接口暴露到局域网。
+同网络容器仍可能访问此接口，不要与不可信容器共享网络。
+macOS 上保持配置目录归当前用户所有，主机 CLI 不使用 sudo；需要生效时显式使用 `--restart`。
 
 认证镜像源引用的环境变量需通过 Compose `environment` 显式传入（只写入 `.env`
 不会注入容器），也可挂载 Compose secrets 并使用 `file:/run/secrets/...` 引用。

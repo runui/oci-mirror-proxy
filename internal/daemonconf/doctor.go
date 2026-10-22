@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,8 @@ type DiagnoseInput struct {
 	InfoErr error
 	// Expected are the files the current configuration should have produced.
 	Expected []File
+	// MirrorSettings is a target capability, independent of the image store.
+	MirrorSettings bool
 }
 
 // Diagnose runs read-only checks. It never changes anything.
@@ -40,12 +43,12 @@ func Diagnose(ctx context.Context, in DiagnoseInput) []Check {
 	store := DetectStore(in.Info)
 	checks = append(checks, Check{Name: "dockerd image store", OK: true, Detail: string(store)})
 
-	if store == StoreLegacy {
+	if store == StoreLegacy || in.MirrorSettings {
 		mirrors := []string{}
 		if in.Info.RegistryConfig != nil {
 			mirrors = in.Info.RegistryConfig.Mirrors
 		}
-		ok := slices.Contains(mirrors, in.ProxyURL)
+		ok := slices.ContainsFunc(mirrors, func(m string) bool { return strings.TrimRight(m, "/") == strings.TrimRight(in.ProxyURL, "/") })
 		detail := fmt.Sprintf("dockerd reports mirrors %v", mirrors)
 		checks = append(checks, Check{Name: "dockerd registry-mirrors", OK: ok, Detail: detail})
 	}
