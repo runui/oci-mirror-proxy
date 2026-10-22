@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 
 	"github.com/runui/oci-mirror-proxy/internal/config"
 )
@@ -163,9 +164,18 @@ func resolveAdminSocket(explicit, configPath string) (string, error) {
 	}
 	// Older service installs supplied this socket only in the service definition.
 	if path == "/etc/oci-mirror-proxy/config.yaml" {
-		return "/run/oci-mirror-proxy/admin.sock", nil
+		return systemAdminSocket(runtime.GOOS), nil
 	}
 	return config.DefaultAdminSocket()
+}
+
+func systemAdminSocket(goos string) string {
+	// macOS has no Linux /run directory. Keep legacy system configurations
+	// consistent with launchd even when they omit an explicit admin socket.
+	if goos == "darwin" {
+		return "/var/run/oci-mirror-proxy/admin.sock"
+	}
+	return "/run/oci-mirror-proxy/admin.sock"
 }
 
 func cmdInit(args []string, stderr, stdout io.Writer) error {

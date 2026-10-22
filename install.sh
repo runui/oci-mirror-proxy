@@ -13,7 +13,7 @@ Options:
   --version TAG  Install this release tag (default: VERSION environment or latest).
   --build        Compile release source instead of downloading a binary.
   --update       Replace the binary found in PATH, unless --prefix is supplied.
-  --service      Install and start a systemd/OpenRC system service (requires root).
+  --service      Install and start a systemd/OpenRC/launchd service (requires root).
   --             Pass remaining arguments to remote update.
   -h, --help     Show this help.
 
@@ -35,26 +35,37 @@ die() {
     exit 1
 }
 
+run_config() {
+    if [ -n "$config_user" ]; then
+        sudo -H -u "$config_user" -- env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_RUNTIME_DIR HOME="$config_home" "$@"
+    else
+        "$@"
+    fi
+}
+
 init_config() {
     init_path=$1
     shift
-    "$destination" init --config "$init_path" "$@" || return 1
-    adaptive_config=$(mktemp "$(dirname -- "$init_path")/.config.yaml.XXXXXXXX") || return 1
+    run_config "$destination" init --config "$init_path" "$@" || return 1
     # Only edit the freshly generated docker.io setting, not other registries or race.enabled.
-    if awk '
+    run_config sh -c '
+    adaptive_config=$(mktemp "$(dirname -- "$1")/.config.yaml.XXXXXXXX") || exit 1
+    if awk '\''
         /^  [^ ]/ { docker = ($0 == "  docker.io:"); adaptive = 0 }
         /^    [^ ]/ { adaptive = (docker && $0 == "    adaptive:") }
         adaptive && /^      enabled:/ { $0 = "      enabled: true"; updated = 1 }
         { print }
         END { if (!updated) exit 1 }
-    ' "$init_path" > "$adaptive_config" && mv -f "$adaptive_config" "$init_path"; then
-        return 0
+    '\'' "$1" > "$adaptive_config" && mv -f "$adaptive_config" "$1"; then
+        exit 0
     fi
     rm -f "$adaptive_config"
-    return 1
+    exit 1
+    ' sh "$init_path"
 }
 
 sync_remote() {
+    [ -z "$sync_skip" ] || { printf '%s\n' "$sync_skip" >&2; return 1; }
     sync_config=
     sync_config_value=false
     for sync_arg do
@@ -94,7 +105,7 @@ sync_remote() {
     if [ ! -e "$sync_config" ] && [ ! -L "$sync_config" ]; then
         init_config "$sync_config" || return 1
     fi
-    "$destination" remote update --config "$sync_config" "$@"
+    run_config "$destination" remote update --config "$sync_config" "$@"
 }
 
 repo=${DOWNLOAD_BASE_URL:-https://git.zmide.com/bin/oci-mirror-proxy}
@@ -155,14 +166,47 @@ destination="$bin_dir/oci-mirror-proxy"
 [ ! -L "$destination" ] || die "refusing to replace symlink $destination; specify the real installation prefix"
 
 manager=
+config_user=
+config_home=
+sync_skip=
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+# A privileged binary install must not create private root-owned files in the
+# invoking user's home. Resolve the account rather than trusting inherited HOME.
+if [ "$service" = false ] && [ "$(id -u)" -eq 0 ]; then
+    if [ -n "${SUDO_USER:-}${SUDO_UID:-}" ]; then
+        if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_UID:-0}" != 0 ] &&
+            [ "$(id -u "$SUDO_USER" 2>/dev/null)" = "${SUDO_UID:-}" ] &&
+            [ "$(id -g "$SUDO_USER" 2>/dev/null)" = "${SUDO_GID:-}" ] && command -v sudo >/dev/null 2>&1; then
+            config_user=$SUDO_USER
+            config_home=$(sudo -H -u "$config_user" -- sh -c 'printf "%s" "$HOME"') || config_home=
+            case "$config_home" in /*) ;; *) sync_skip='Cannot resolve the invoking user home; run remote update as that user.' ;; esac
+            HOME=$config_home
+            unset XDG_CONFIG_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR
+        else
+            sync_skip='Cannot validate the sudo account; run remote update as the intended user.'
+        fi
+    else
+        # Direct root installs use root's account home, never an inherited user home.
+        config_home=$(cd ~root && pwd) || die 'cannot resolve root home'
+        HOME=$config_home
+        export HOME
+        unset XDG_CONFIG_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR
+    fi
+fi
 if [ "$service" = true ]; then
-    [ "$(uname -s)" = Linux ] || die '--service requires Linux'
+    case "$os" in linux|darwin) ;; *) die '--service requires Linux or macOS' ;; esac
     [ "$(id -u)" -eq 0 ] || die '--service requires root; rerun as root (sudo is not invoked automatically)'
     # Service definitions interpret paths themselves; only accept literal safe paths.
     case "$destination" in
         *[!a-zA-Z0-9/._+-]*) die '--service requires an installation path without spaces or special characters' ;;
     esac
-    if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    if [ "$os" = darwin ]; then
+        command -v launchctl >/dev/null 2>&1 || die 'launchctl is required'
+        command -v plutil >/dev/null 2>&1 || die 'plutil is required'
+        manager=launchd
+        service_label=com.runui.oci-mirror-proxy
+        service_file=/Library/LaunchDaemons/$service_label.plist
+    elif [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
         manager=systemd
         service_file=/etc/systemd/system/oci-mirror-proxy.service
     elif [ -d /run/openrc ] && command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
@@ -170,12 +214,36 @@ if [ "$service" = true ]; then
         service_file=/etc/init.d/oci-mirror-proxy
     else
         printf 'Warning: no running systemd or OpenRC detected; installing binary only.\n' >&2
+        sync_skip='No service manager detected; run remote update as the intended user.'
     fi
 fi
 
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/oci-mirror-proxy-install.XXXXXXXX")
 staged_binary=
+rollback=false
 cleanup() {
+    if [ "$rollback" = true ]; then
+        printf 'Restoring the previous launchd installation after failure...\n' >&2
+        launchctl bootout "system/$service_label" >/dev/null 2>&1 || true
+        if [ -f "$build_dir/previous-binary" ]; then
+            restore_binary=$(mktemp "$bin_dir/.oci-mirror-proxy.XXXXXXXX") &&
+                cp -p "$build_dir/previous-binary" "$restore_binary" &&
+                mv -f "$restore_binary" "$destination" || printf 'Warning: binary restore failed.\n' >&2
+        else
+            rm -f "$destination"
+        fi
+        if [ -f "$build_dir/previous-service" ]; then
+            cp -p "$build_dir/previous-service" "$service_file" || printf 'Warning: service definition restore failed.\n' >&2
+            if [ "$previous_loaded" = true ]; then
+                launchctl bootstrap system "$service_file" || printf 'Warning: previous service restart failed.\n' >&2
+            fi
+        else
+            rm -f "$service_file"
+        fi
+        if [ "$previous_disabled" = true ]; then
+            launchctl disable "system/$service_label" || printf 'Warning: disabled state restore failed.\n' >&2
+        fi
+    fi
     rm -rf "$build_dir"
     if [ -n "$staged_binary" ]; then rm -f "$staged_binary"; fi
 }
@@ -223,6 +291,38 @@ start_pre() {
     checkpath --directory --mode 0700 --owner root:root /run/oci-mirror-proxy
 }
 EOF
+elif [ "$manager" = launchd ]; then
+    # Do not follow redirected privileged directories into user-controlled data.
+    for service_dir in /Library/LaunchDaemons /var/log/oci-mirror-proxy /etc/oci-mirror-proxy; do
+        [ ! -L "$service_dir" ] || die "refusing service directory symlink $service_dir"
+    done
+    for log_file in /var/log/oci-mirror-proxy/stdout.log /var/log/oci-mirror-proxy/stderr.log; do
+        [ ! -L "$log_file" ] || die "refusing service log symlink $log_file"
+    done
+    cat > "$build_dir/service" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Managed by oci-mirror-proxy install.sh -->
+<plist version="1.0"><dict>
+<key>Label</key><string>$service_label</string>
+<key>ProgramArguments</key><array>
+<string>$destination</string><string>serve</string>
+<string>--config</string><string>/etc/oci-mirror-proxy/config.yaml</string>
+</array>
+<key>WorkingDirectory</key><string>/</string>
+<key>EnvironmentVariables</key><dict>
+<key>HOME</key><string>/var/root</string>
+<key>XDG_RUNTIME_DIR</key><string>/var/run</string>
+</dict>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+<key>ThrottleInterval</key><integer>5</integer>
+<key>Umask</key><integer>63</integer>
+<key>StandardOutPath</key><string>/var/log/oci-mirror-proxy/stdout.log</string>
+<key>StandardErrorPath</key><string>/var/log/oci-mirror-proxy/stderr.log</string>
+</dict></plist>
+EOF
+    plutil -lint "$build_dir/service" >/dev/null || die 'invalid launchd service definition'
 fi
 if [ -n "$manager" ]; then
     # Preserve custom definitions, including edits to a previously generated file.
@@ -308,6 +408,18 @@ if [ "$build" = true ]; then
 fi
 
 mkdir -p "$bin_dir" || die "cannot create $bin_dir; try --prefix \"\$HOME/.local\""
+if [ "$manager" = launchd ]; then
+    # Back up only installer-owned artifacts; configuration is never rolled back.
+    previous_loaded=false
+    if launchctl print "system/$service_label" >/dev/null 2>&1; then previous_loaded=true; fi
+    [ "$previous_loaded" != true ] || [ -f "$service_file" ] || die 'loaded launchd service has no managed definition; manage it manually'
+    previous_disabled=false
+    # launchd persists disabled overrides independently of the plist.
+    if launchctl print-disabled system | grep -F "\"$service_label\" => true" >/dev/null; then previous_disabled=true; fi
+    if [ -e "$destination" ]; then cp -p "$destination" "$build_dir/previous-binary"; fi
+    if [ -e "$service_file" ]; then cp -p "$service_file" "$build_dir/previous-service"; fi
+    rollback=true
+fi
 # Rename on the same filesystem so updating a running executable is safe.
 staged_binary=$(mktemp "$bin_dir/.oci-mirror-proxy.XXXXXXXX")
 install -m 755 "$build_dir/oci-mirror-proxy" "$staged_binary"
@@ -318,7 +430,11 @@ if [ -n "$manager" ]; then
     config=/etc/oci-mirror-proxy/config.yaml
     if [ ! -e "$config" ] && [ ! -L "$config" ]; then
         install -d -m 700 /etc/oci-mirror-proxy
-        init_config "$config" --admin-socket /run/oci-mirror-proxy/admin.sock
+        if [ "$manager" = launchd ]; then
+            init_config "$config" --admin-socket /var/run/oci-mirror-proxy/admin.sock
+        else
+            init_config "$config" --admin-socket /run/oci-mirror-proxy/admin.sock
+        fi
     fi
     if [ "$manager" = systemd ]; then
         install -m 644 "$build_dir/service" "$service_file"
@@ -326,7 +442,7 @@ if [ -n "$manager" ]; then
         systemctl enable oci-mirror-proxy.service
         systemctl restart oci-mirror-proxy.service
         systemctl is-active --quiet oci-mirror-proxy.service
-    else
+    elif [ "$manager" = openrc ]; then
         install -m 755 "$build_dir/service" "$service_file"
         rc-update add oci-mirror-proxy default
         if rc-service oci-mirror-proxy status >/dev/null 2>&1; then
@@ -335,9 +451,44 @@ if [ -n "$manager" ]; then
             rc-service oci-mirror-proxy start
         fi
         rc-service oci-mirror-proxy status
+    else
+        # Resolve the same runtime fallback as the daemon, not the installer's
+        # inherited user environment, when an older config has no socket path.
+        HOME=/var/root
+        XDG_RUNTIME_DIR=/var/run
+        export HOME XDG_RUNTIME_DIR
+        unset XDG_CONFIG_HOME XDG_CACHE_HOME
+        install -d -m 755 /Library/LaunchDaemons
+        install -d -m 700 /var/log/oci-mirror-proxy
+        install -o root -g wheel -m 644 "$build_dir/service" "$service_file"
+        if launchctl print "system/$service_label" >/dev/null 2>&1; then
+            launchctl bootout "system/$service_label"
+        fi
+        launchctl enable "system/$service_label"
+        launchctl bootstrap system "$service_file"
+        # Registration alone does not imply a healthy process. The app creates
+        # its socket directory on every start, including after /var/run is reset.
+        ready=false
+        attempts=0
+        while [ "$attempts" -lt 15 ]; do
+            if launchctl print "system/$service_label" > "$build_dir/launch-state" 2>&1 &&
+                grep -E 'pid = [0-9]+' "$build_dir/launch-state" >/dev/null &&
+                "$destination" status --config "$config" > "$build_dir/status" 2>&1; then
+                ready=true
+                break
+            fi
+            attempts=$((attempts + 1))
+            sleep 1
+        done
+        if [ "$ready" != true ]; then
+            launchctl print "system/$service_label" >&2 || true
+            if [ -f "$build_dir/status" ]; then cat "$build_dir/status" >&2; fi
+            die 'launchd service did not become ready; inspect /var/log/oci-mirror-proxy/stderr.log'
+        fi
     fi
     printf 'Service enabled and started (%s). Config: %s\n' "$manager" "$config"
-    printf 'Admin commands: sudo oci-mirror-proxy status\n'
+    printf 'Admin commands: sudo oci-mirror-proxy status --config %s\n' "$config"
+    rollback=false
 elif [ "$update" = true ]; then
     printf 'Configuration preserved. Restart any running proxy service to use the update.\n'
 else
@@ -350,4 +501,5 @@ if sync_output=$(sync_remote "$@" 2>&1); then
     printf '%s\n' "$sync_output"
 else
     printf 'Warning: remote subscription sync failed; installation succeeded.\n%s\n' "$sync_output" >&2
+    printf 'If permission is denied, inspect the config directory and its .lock ownership as the intended user. Do not delete active lock files or make private configuration world-writable.\n' >&2
 fi

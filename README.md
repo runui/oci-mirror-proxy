@@ -114,7 +114,10 @@ to install into `C:\Tools\bin`, or `-Version v1.0.1` to select a release.
 Add the installation directory to PATH yourself. Stop the proxy before updating
 on Windows; running executables may be locked. The PowerShell installer does not
 build from source, synchronize subscriptions, or install a Windows service.
-The `--service` option is available on Linux with systemd or OpenRC.
+The `--service` option supports Linux systemd/OpenRC and macOS launchd system
+services. Sudo installs without `--service` initialize user configuration as the
+verified invoking user. See [macOS installation and permissions](docs/macos-installation.md)
+for service management and recovery from older root-owned user configurations.
 
 ## Docker deployment
 

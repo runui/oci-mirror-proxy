@@ -31,6 +31,17 @@ func TestDiscoverConfigPath(t *testing.T) {
 	check(user)
 }
 
+func TestSystemAdminSocket(t *testing.T) {
+	for _, tc := range []struct{ os, want string }{
+		{"darwin", "/var/run/oci-mirror-proxy/admin.sock"},
+		{"linux", "/run/oci-mirror-proxy/admin.sock"},
+	} {
+		if got := systemAdminSocket(tc.os); got != tc.want {
+			t.Fatalf("%s: got %q, want %q", tc.os, got, tc.want)
+		}
+	}
+}
+
 func TestResolveAdminSocket(t *testing.T) {
 	cfg := config.Default()
 	cfg.Admin.Socket = filepath.Join(t.TempDir(), "configured.sock")

@@ -5,6 +5,7 @@ package config
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
 	"time"
@@ -15,7 +16,7 @@ import (
 func Lock(ctx context.Context, main string) (func(), error) {
 	f, err := os.OpenFile(main+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, lockOpenError(main, err)
 	}
 	return lockFile(ctx, f, syscall.LOCK_EX)
 }
@@ -28,9 +29,18 @@ func ReadLock(ctx context.Context, main string) (func(), error) {
 		return func() {}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, lockOpenError(main, err)
 	}
 	return lockFile(ctx, f, syscall.LOCK_SH)
+}
+
+func lockOpenError(main string, err error) error {
+	if errors.Is(err, os.ErrPermission) {
+		// Keep the underlying PathError for callers. Do not unlink the sidecar or
+		// relax its permissions: both would undermine configuration isolation.
+		return fmt.Errorf("%w; check ownership and permissions of the configuration directory and %s.lock (a previous sudo invocation may have created root-owned files); repair ownership only for your own user configuration, without deleting the lock file", err, main)
+	}
+	return err
 }
 
 func lockFile(ctx context.Context, f *os.File, mode int) (func(), error) {

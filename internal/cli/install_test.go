@@ -24,19 +24,34 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name         string
-		userConfig   bool
-		systemConfig bool
-		service      bool
-		update       bool
-		syncFail     bool
-		initFail     bool
-		serviceFail  bool
-		remoteArgs   []string
-		customConfig bool
-		customExists bool
+		name            string
+		userConfig      bool
+		systemConfig    bool
+		service         bool
+		update          bool
+		syncFail        bool
+		initFail        bool
+		serviceFail     bool
+		remoteArgs      []string
+		customConfig    bool
+		customExists    bool
+		darwin          bool
+		sudo            bool
+		invalidSudo     bool
+		existingService bool
+		customService   bool
 	}{
 		{name: "first install"},
+		{name: "macOS first install", darwin: true},
+		{name: "macOS service", darwin: true, service: true},
+		{name: "macOS service failure", darwin: true, service: true, serviceFail: true},
+		{name: "macOS service update", darwin: true, service: true, existingService: true},
+		{name: "macOS update rollback", darwin: true, service: true, existingService: true, serviceFail: true},
+		{name: "macOS preserves custom service", darwin: true, service: true, customService: true},
+		{name: "sudo macOS install", darwin: true, sudo: true},
+		{name: "sudo Linux install", sudo: true},
+		{name: "unverified sudo account", sudo: true, invalidSudo: true},
+		{name: "sudo argument boundaries", darwin: true, sudo: true, remoteArgs: []string{"--region", "", "--url", "https://example.com/a?x=1&y=2"}},
 		{name: "existing user configuration", userConfig: true},
 		{name: "existing system configuration", systemConfig: true},
 		{name: "user configuration takes precedence", userConfig: true, systemConfig: true},
@@ -70,7 +85,7 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 			}
 			// Redirect system paths into the fixture; never touch host services.
 			isolated := string(script)
-			for _, path := range []string{"/etc/oci-mirror-proxy", "/etc/systemd/system", "/etc/init.d", "/run/systemd/system", "/run/openrc", "/run/oci-mirror-proxy"} {
+			for _, path := range []string{"/etc/oci-mirror-proxy", "/etc/systemd/system", "/etc/init.d", "/run/systemd/system", "/run/openrc", "/run/oci-mirror-proxy", "/Library/LaunchDaemons", "/var/log/oci-mirror-proxy", "/var/run/oci-mirror-proxy"} {
 				isolated = strings.ReplaceAll(isolated, path, root+path)
 			}
 			scriptPath := filepath.Join(root, "install.sh")
@@ -78,6 +93,9 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 			home := filepath.Join(root, "home with spaces")
 			configDir := filepath.Join(home, ".config")
 			userConfig := filepath.Join(configDir, "oci-mirror-proxy", "config.yaml")
+			if tc.darwin {
+				userConfig = filepath.Join(home, "Library", "Application Support", "oci-mirror-proxy", "config.yaml")
+			}
 			systemConfig := filepath.Join(root, "etc", "oci-mirror-proxy", "config.yaml")
 			customConfig := filepath.Join(root, "custom config", "proxy.yaml")
 			if tc.userConfig {
@@ -98,9 +116,37 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 			}
 			tools := filepath.Join(root, "tools")
 			write(filepath.Join(tools, "uname"), `#!/bin/sh
-case "$1" in -s) echo Linux ;; -m) echo x86_64 ;; *) exit 1 ;; esac
+case "$1" in -s) echo "$TEST_OS" ;; -m) echo x86_64 ;; *) exit 1 ;; esac
 `, 0o755)
-			write(filepath.Join(tools, "id"), "#!/bin/sh\necho 0\n", 0o755)
+			write(filepath.Join(tools, "id"), `#!/bin/sh
+if [ "$#" -eq 2 ]; then echo 501; else echo "$TEST_UID"; fi
+`, 0o755)
+			write(filepath.Join(tools, "sudo"), `#!/bin/sh
+set -eu
+[ "$1" = -H ] && [ "$2" = -u ] && [ "$3" = fixture-user ] && [ "$4" = -- ]
+shift 4
+export HOME="$TEST_USER_HOME"
+printf 'sudo-user\n' >> "$TEST_LOG"
+exec "$@"
+`, 0o755)
+			write(filepath.Join(tools, "launchctl"), `#!/bin/sh
+printf 'launchctl %s\n' "$*" >> "$TEST_LOG"
+case "$1" in
+    print) [ -f "$TEST_LOADED" ] || exit 1; echo 'pid = 123' ;;
+    bootout) rm -f "$TEST_LOADED" ;;
+    bootstrap)
+        if [ "$TEST_SERVICE_FAIL" = true ] && [ ! -f "$TEST_FAILED" ]; then touch "$TEST_FAILED"; exit 1; fi
+        touch "$TEST_LOADED"
+        ;;
+esac
+`, 0o755)
+			write(filepath.Join(tools, "plutil"), "#!/bin/sh\nexit 0\n", 0o755)
+			// Ownership arguments are validated separately on real macOS; the fixture
+			// must run unprivileged on Linux too, where the wheel group may not exist.
+			write(filepath.Join(tools, "install"), `#!/bin/sh
+if [ "$1" = -o ]; then shift 4; fi
+exec /usr/bin/install "$@"
+`, 0o755)
 			write(filepath.Join(tools, "curl"), "#!/bin/sh\ncat \"$TEST_SOURCE\"\n", 0o755)
 			write(filepath.Join(tools, "go"), `#!/bin/sh
 set -eu
@@ -138,6 +184,7 @@ case "$1" in
         if [ "$TEST_SYNC_FAIL" = true ]; then echo 'mock catalog unavailable' >&2; exit 1; fi
         echo 'mock synchronized'
         ;;
+    status) exit 0 ;;
     *) exit 1 ;;
 esac
 `, 0o755)
@@ -172,6 +219,11 @@ esac
 				t.Fatal(err)
 			}
 			prefix := filepath.Join(root, "prefix")
+			servicePath := filepath.Join(root, "Library", "LaunchDaemons", "com.runui.oci-mirror-proxy.plist")
+			loadedPath := filepath.Join(root, "loaded")
+			if tc.customService {
+				write(servicePath, "custom service\n", 0o644)
+			}
 			logPath := filepath.Join(root, "commands.log")
 			args := []string{scriptPath, "--build", "--version", "vtest", "--prefix", prefix}
 			if tc.service {
@@ -191,23 +243,92 @@ esac
 			}
 			remoteArgsPath := filepath.Join(root, "remote-args")
 			cmd := exec.CommandContext(t.Context(), "sh", args...)
+			platform := "Linux"
+			if tc.darwin {
+				platform = "Darwin"
+			}
+			uid := "501"
+			if tc.service || tc.sudo {
+				uid = "0"
+			}
 			cmd.Env = append(os.Environ(), "PATH="+tools+":"+os.Getenv("PATH"), "HOME="+home,
+				"TEST_OS="+platform, "TEST_UID="+uid, "SUDO_USER=", "SUDO_UID=", "SUDO_GID=",
+				"TEST_LOADED="+loadedPath, "TEST_FAILED="+filepath.Join(root, "failed"),
 				"XDG_CONFIG_HOME="+configDir, "TMPDIR="+root, "DOWNLOAD_BASE_URL=https://download.example/repo",
 				"TEST_SOURCE="+sourcePath, "TEST_BINARY="+binary, "TEST_LOG="+logPath,
 				"TEST_CONFIG_TEMPLATE="+templatePath,
 				"TEST_REMOTE_ARGS="+remoteArgsPath,
 				"TEST_INIT_FAIL="+strconv.FormatBool(tc.initFail), "TEST_SYNC_FAIL="+strconv.FormatBool(tc.syncFail),
 				"TEST_SERVICE_FAIL="+strconv.FormatBool(tc.serviceFail))
+			if tc.sudo {
+				sudoUID := "501"
+				if tc.invalidSudo {
+					sudoUID = "999"
+				}
+				cmd.Env = append(cmd.Env, "SUDO_USER=fixture-user", "SUDO_UID="+sudoUID, "SUDO_GID=501", "TEST_USER_HOME="+home,
+					"HOME="+filepath.Join(root, "wrong inherited home"))
+				if !tc.darwin {
+					userConfig = filepath.Join(home, ".config", "oci-mirror-proxy", "config.yaml")
+				}
+			}
+			if tc.existingService {
+				// First create the exact generated definition, then exercise replacement
+				// or recovery of an already loaded service with a distinct executable.
+				first := exec.CommandContext(t.Context(), "sh", args...)
+				first.Env = append(cmd.Environ(), "TEST_SERVICE_FAIL=false")
+				if out, err := first.CombinedOutput(); err != nil {
+					t.Fatalf("initial service installation: %v\n%s", err, out)
+				}
+				write(filepath.Join(prefix, "bin", "oci-mirror-proxy"), "previous executable\n", 0o755)
+				write(logPath, "", 0o600)
+			}
 			out, runErr := cmd.CombinedOutput()
 			log, _ := os.ReadFile(logPath)
+			if tc.customService {
+				data, _ := os.ReadFile(servicePath)
+				if runErr == nil || string(data) != "custom service\n" || bytes.Contains(log, []byte("launchctl bootstrap")) {
+					t.Fatalf("custom service overwritten: %v\n%s\n%s", runErr, out, log)
+				}
+				return
+			}
 			if tc.serviceFail {
 				if runErr == nil || bytes.Contains(log, []byte("remote update")) || bytes.Contains(out, []byte("installation succeeded")) {
 					t.Fatalf("service failure was ignored or attempted sync: err=%v\n%s\n%s", runErr, out, log)
+				}
+				if tc.existingService {
+					data, _ := os.ReadFile(filepath.Join(prefix, "bin", "oci-mirror-proxy"))
+					if string(data) != "previous executable\n" || !bytes.Contains(out, []byte("Restoring the previous")) {
+						t.Fatalf("previous binary not restored: %s\n%s", data, out)
+					}
+					if _, err := os.Stat(loadedPath); err != nil {
+						t.Fatalf("previous service not loaded: %v", err)
+					}
 				}
 				return
 			}
 			if runErr != nil {
 				t.Fatalf("installer failed: %v\n%s", runErr, out)
+			}
+			if tc.invalidSudo {
+				if bytes.Contains(log, []byte("remote update")) || bytes.Contains(log, []byte("init --config")) || !bytes.Contains(out, []byte("Cannot validate the sudo account")) {
+					t.Fatalf("unverified account touched configuration: %s\n%s", out, log)
+				}
+				return
+			}
+			if tc.darwin && tc.service {
+				definition, err := os.ReadFile(servicePath)
+				if err != nil || !bytes.Contains(definition, []byte("<key>ProgramArguments</key>")) || !bytes.Contains(definition, []byte("<key>XDG_RUNTIME_DIR</key>")) {
+					t.Fatalf("missing launchd arguments or runtime environment: %v\n%s", err, definition)
+				}
+				if runtime.GOOS == "darwin" {
+					lint := exec.CommandContext(t.Context(), "/usr/bin/plutil", "-lint", servicePath)
+					if out, err := lint.CombinedOutput(); err != nil {
+						t.Fatalf("invalid generated plist: %v\n%s", err, out)
+					}
+				}
+			}
+			if tc.sudo && bytes.Count(log, []byte("sudo-user\n")) < 4 {
+				t.Fatalf("configuration operations did not drop privileges: %s", log)
 			}
 			installed, err := os.ReadFile(filepath.Join(prefix, "bin", "oci-mirror-proxy"))
 			if err != nil || !bytes.Contains(installed, []byte("mock synchronized")) {

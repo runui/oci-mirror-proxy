@@ -72,7 +72,7 @@ Invoke-WebRequest https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/i
 .\install.ps1 -Update
 ```
 
-Windows 安装脚本校验 SHA256，默认安装到 `$env:LOCALAPPDATA\oci-mirror-proxy\bin`，需自行添加到 PATH。使用 `-Prefix C:\Tools` 可安装到 `C:\Tools\bin`，`-Version v1.0.1` 可指定版本，`-DownloadBaseUrl` 可指定仓库地址。更新前请停止程序，避免可执行文件被锁定。PowerShell 脚本不执行源码构建、订阅同步或 Windows 服务安装；`--service` 选项适用于使用 systemd 或 OpenRC 的 Linux 系统。
+Windows 安装脚本校验 SHA256，默认安装到 `$env:LOCALAPPDATA\oci-mirror-proxy\bin`，需自行添加到 PATH。使用 `-Prefix C:\Tools` 可安装到 `C:\Tools\bin`，`-Version v1.0.1` 可指定版本，`-DownloadBaseUrl` 可指定仓库地址。更新前请停止程序，避免可执行文件被锁定。PowerShell 脚本不执行源码构建、订阅同步或 Windows 服务安装；`--service` 选项支持 Linux 的 systemd/OpenRC 和 macOS 的 launchd 系统服务。不带 `--service` 的 sudo 安装会以经过验证的原用户身份初始化用户配置。服务管理与历史权限问题的修复参见 [macOS 安装指南](docs/macos-installation.md)。
 
 如需使用下载镜像，将 `DOWNLOAD_BASE_URL` 设为镜像仓库根 URL（需保持相同的 `/releases` 和 `/archive` 布局）。通过管道执行脚本时，应将变量传给 `sh`，而不只是传给 `curl`：
 
