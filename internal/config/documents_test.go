@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -115,6 +116,9 @@ func TestCommitRejectsConcurrentEditAndSymlink(t *testing.T) {
 	}
 	link := path + ".link"
 	if err := os.Symlink(path, link); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			t.Skipf("symlink creation requires Developer Mode or elevated privileges: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if err := Commit(link, []byte("old\n"), []byte("new\n")); err == nil {
@@ -153,6 +157,9 @@ func TestPersistRollsBackEarlierEditsOnLaterFileFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(backing, fragment); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			t.Skipf("symlink creation requires Developer Mode or elevated privileges: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if err := b.Persist(); err == nil {

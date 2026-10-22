@@ -13,6 +13,7 @@ import (
 	"github.com/runui/oci-mirror-proxy/internal/daemonconf"
 	"github.com/runui/oci-mirror-proxy/internal/dockerintegration"
 	"github.com/runui/oci-mirror-proxy/internal/dockerintegration/desktopmac"
+	"github.com/runui/oci-mirror-proxy/internal/dockerintegration/desktopwindows"
 	linuxintegration "github.com/runui/oci-mirror-proxy/internal/dockerintegration/linux"
 )
 
@@ -41,10 +42,14 @@ func Resolve(ctx context.Context, o Options) (dockerintegration.Adapter, error) 
 		}
 		desktop = info.OperatingSystem == "Docker Desktop"
 		if desktop {
-			if runtime.GOOS != "darwin" {
+			switch runtime.GOOS {
+			case "darwin":
+				paths, err = desktopmac.Defaults()
+			case "windows":
+				paths, err = desktopwindows.Defaults()
+			default:
 				return nil, fmt.Errorf("this Docker Desktop host is not supported")
 			}
-			paths, err = desktopmac.Defaults()
 		} else {
 			if runtime.GOOS != "linux" {
 				return nil, fmt.Errorf("the selected engine cannot be configured locally on %s", runtime.GOOS)
@@ -56,7 +61,14 @@ func Resolve(ctx context.Context, o Options) (dockerintegration.Adapter, error) 
 		}
 		paths.DockerSocket = socket
 	} else {
-		paths, err = linuxintegration.Defaults(o.Rootless)
+		if runtime.GOOS == "windows" {
+			if o.Overrides.PidFile != "" {
+				return nil, fmt.Errorf("--pid-file is only supported for Unix Docker engines")
+			}
+			paths, err = desktopwindows.OfflineDefaults(o.Rootless)
+		} else {
+			paths, err = linuxintegration.Defaults(o.Rootless)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -76,7 +88,13 @@ func Resolve(ctx context.Context, o Options) (dockerintegration.Adapter, error) 
 		if o.Rootless {
 			return nil, fmt.Errorf("rootless overrides do not match the selected engine")
 		}
+		if runtime.GOOS == "windows" {
+			return desktopwindows.Adapter{Adapter: desktopmac.Adapter{Locations: paths}}, nil
+		}
 		return desktopmac.Adapter{Locations: paths}, nil
+	}
+	if runtime.GOOS == "windows" {
+		return desktopwindows.OfflineAdapter{Adapter: linuxintegration.Adapter{Locations: paths}}, nil
 	}
 	return linuxintegration.Adapter{Locations: paths}, nil
 }
@@ -106,6 +124,12 @@ func endpoint(ctx context.Context, override string) (string, error) {
 }
 
 func localSocket(endpoint string) (string, error) {
+	if runtime.GOOS == "windows" && strings.HasPrefix(endpoint, "npipe://") {
+		path := strings.ReplaceAll(strings.TrimPrefix(endpoint, "npipe://"), "/", `\`)
+		if strings.HasPrefix(strings.ToLower(path), `\\.\pipe\`) && len(path) > len(`\\.\pipe\`) {
+			return path, nil
+		}
+	}
 	path, ok := strings.CutPrefix(endpoint, "unix://")
 	if !ok || !strings.HasPrefix(path, "/") {
 		return "", fmt.Errorf("refusing to modify local configuration for non-local Docker endpoint %q", endpoint)

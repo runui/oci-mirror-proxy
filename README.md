@@ -41,7 +41,7 @@ Not supported: push, a local blob cache, keychain secret backends, and metrics e
 ## Requirements
 
 - Go 1.26 or newer, to build.
-- A local Docker Engine on Linux or Docker Desktop on macOS. See
+- A local Docker Engine on Linux or Docker Desktop on macOS/Windows (Linux containers). See
   [automatic Docker integration](docs/docker-integration.md). Rootless dockerd needs the listen address
   reachable from its network namespace, which is left to the operator (see
   [docs/operations.md](docs/operations.md#rootless-dockerd)).
@@ -99,21 +99,23 @@ Prebuilt binaries are available for the following platforms:
 | FreeBSD | amd64, arm64 | `.tar.gz` |
 | Windows | amd64, arm64 | `.zip` |
 
-On Windows, download and inspect the PowerShell installer, then run it:
+On Windows, download and inspect the PowerShell installer, then run it in
+PowerShell. Approve the Windows administrator prompt when requested:
 
 ```powershell
 Invoke-WebRequest https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.ps1 -OutFile install.ps1
 .\install.ps1 -DownloadBaseUrl https://github.com/runui/oci-mirror-proxy
-# Update an executable already in PATH:
+# Update the installation and restart its service:
 .\install.ps1 -DownloadBaseUrl https://github.com/runui/oci-mirror-proxy -Update
 ```
 
-The Windows installer verifies SHA256 and installs into
-`$env:LOCALAPPDATA\oci-mirror-proxy\bin` by default. Use `-Prefix C:\Tools`
-to install into `C:\Tools\bin`, or `-Version v1.0.1` to select a release.
-Add the installation directory to PATH yourself. Stop the proxy before updating
-on Windows; running executables may be locked. The PowerShell installer does not
-build from source, synchronize subscriptions, or install a Windows service.
+The installer starts the proxy as a Windows service, enables startup at boot,
+and adds the program to PATH. Open a new terminal to run `oci-mirror-proxy`
+directly. Updates preserve existing configuration. .NET Framework 4.x is required.
+
+For service management and Docker Desktop setup, see [operations](docs/operations.md).
+For optional installation settings, run `Get-Help .\install.ps1 -Full`.
+
 The `--service` option supports Linux systemd/OpenRC and macOS launchd system
 services. Sudo installs without `--service` initialize user configuration as the
 verified invoking user. See [macOS installation and permissions](docs/macos-installation.md)

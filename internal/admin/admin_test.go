@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -90,7 +91,11 @@ func (f *fakeController) Reload() error {
 // shortTempDir keeps socket paths below the platform limit.
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "omp")
+	base := ""
+	if runtime.GOOS != "windows" {
+		base = "/tmp" // macOS's default temp directory can exceed sun_path.
+	}
+	dir, err := os.MkdirTemp(base, "omp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +203,9 @@ func TestAdminRejectsUnknownFields(t *testing.T) {
 }
 
 func TestListenSetsPrivatePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows named pipe DACLs are tested separately")
+	}
 	sock := filepath.Join(shortTempDir(t), "private", "admin.sock")
 	ln, err := Listen(sock)
 	if err != nil {
@@ -233,6 +241,14 @@ func TestListenRefusesLiveSocketAndReplacesStaleOne(t *testing.T) {
 	// Closing the listener removes the socket file, so a crash-like leftover is
 	// simulated with a plain file instead.
 	_ = first.Close()
+	if runtime.GOOS == "windows" {
+		ln, err := Listen(sock)
+		if err != nil {
+			t.Fatalf("closed pipe must be reusable: %v", err)
+		}
+		ln.Close()
+		return
+	}
 	if err := os.WriteFile(sock, []byte("stale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +260,10 @@ func TestListenRefusesLiveSocketAndReplacesStaleOne(t *testing.T) {
 }
 
 func TestListenRejectsLongPaths(t *testing.T) {
-	long := "/tmp/" + strings.Repeat("a", maxSocketPath) + "/admin.sock"
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows pipes accept filesystem paths longer than Unix sockets")
+	}
+	long := "/tmp/" + strings.Repeat("a", 103) + "/admin.sock"
 	if _, err := Listen(long); err == nil {
 		t.Fatal("overlong socket path must be rejected before binding")
 	}

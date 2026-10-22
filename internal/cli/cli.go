@@ -131,6 +131,9 @@ func resolveConfigPath(explicit string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if runtime.GOOS == "windows" {
+		return path, nil
+	}
 	return discoverConfigPath(path, "/etc/oci-mirror-proxy/config.yaml")
 }
 

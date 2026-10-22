@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -110,6 +111,14 @@ func DefaultPath() (string, error) {
 // DefaultAdminSocket returns the per-user admin socket location. It prefers
 // XDG_RUNTIME_DIR, which is per session and cleared on logout.
 func DefaultAdminSocket() (string, error) {
+	if runtime.GOOS == "windows" {
+		dir, err := os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("locate user config directory: %w", err)
+		}
+		// The transport maps this stable per-user path to a protected named pipe.
+		return filepath.Join(dir, AppName, "admin.sock"), nil
+	}
 	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
 		return filepath.Join(dir, AppName, "admin.sock"), nil
 	}

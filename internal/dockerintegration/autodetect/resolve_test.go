@@ -2,6 +2,7 @@ package autodetect
 
 import (
 	"github.com/runui/oci-mirror-proxy/internal/dockerintegration"
+	"runtime"
 	"testing"
 )
 
@@ -16,13 +17,29 @@ func TestLocalEndpointOnly(t *testing.T) {
 	}
 }
 
+func TestLocalNamedPipeEndpoint(t *testing.T) {
+	for _, endpoint := range []string{"npipe:////remote/pipe/docker_engine", "npipe:////./pipe/"} {
+		if _, err := localSocket(endpoint); err == nil {
+			t.Fatalf("accepted %q", endpoint)
+		}
+	}
+	got, err := localSocket("npipe:////./pipe/dockerDesktopLinuxEngine")
+	if runtime.GOOS == "windows" {
+		if err != nil || got != `\\.\pipe\dockerDesktopLinuxEngine` {
+			t.Fatalf("%q %v", got, err)
+		}
+	} else if err == nil {
+		t.Fatal("Windows pipe accepted on a non-Windows host")
+	}
+}
+
 func TestOfflineOverrides(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "ssh://must-not-contact")
 	adapter, err := Resolve(t.Context(), Options{Store: "legacy", Overrides: dockerintegration.Paths{DaemonJSON: "/test/daemon.json", StateDir: "/test/state"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if adapter.RequiresRestart() || adapter.Paths().DaemonJSON != "/test/daemon.json" {
+	if adapter.RequiresRestart() != (runtime.GOOS == "windows") || adapter.Paths().DaemonJSON != "/test/daemon.json" {
 		t.Fatalf("unexpected adapter: %+v", adapter)
 	}
 }

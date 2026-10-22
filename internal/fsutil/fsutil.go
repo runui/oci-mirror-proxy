@@ -47,7 +47,7 @@ func writeFileAtomic(path string, data []byte, perm fs.FileMode, syncDir func(st
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := replaceFile(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("replace %s: %w", path, err)
 	}
@@ -75,15 +75,6 @@ func removeFile(path string, syncDir func(string) error) error {
 	return nil
 }
 
-func syncDirectory(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open directory for sync: %w", err)
-	}
-	defer d.Close()
-	return d.Sync()
-}
-
 func writeAndSync(f *os.File, data []byte, perm fs.FileMode) error {
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
@@ -104,7 +95,7 @@ func writeAndSync(f *os.File, data []byte, perm fs.FileMode) error {
 // ReadOptional reads path. A missing file is not an error: it returns nil data
 // and exists == false.
 func ReadOptional(path string) (data []byte, exists bool, err error) {
-	data, err = os.ReadFile(path)
+	data, err = ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
 	}

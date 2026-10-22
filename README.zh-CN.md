@@ -33,7 +33,7 @@ GIF 为加速预览，原始录制保留真实时间。
 ## 环境要求
 
 - 构建需要 Go 1.26 或更新版本。
-- 支持本机 Linux Docker Engine 或 macOS Docker Desktop。对于 rootless dockerd，操作者需要确保其网络命名空间能够访问代理监听地址，详见[运维指南](docs/zh-CN/operations.md#rootless-dockerd)。
+- 支持本机 Linux Docker Engine 或 macOS/Windows Docker Desktop（Linux 容器模式）。对于 rootless dockerd，操作者需要确保其网络命名空间能够访问代理监听地址，详见[运维指南](docs/zh-CN/operations.md#rootless-dockerd)。
 
 ## 安装
 
@@ -63,16 +63,24 @@ curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.
 
 预编译程序支持以下平台：Linux 支持 `amd64`、`arm64`、`armv7`、`riscv64`；macOS、FreeBSD 和 Windows 支持 `amd64`、`arm64`。Windows 使用 `.zip`，其他系统使用 `.tar.gz`。
 
-Windows 用户可下载并检查 PowerShell 安装脚本后执行：
+Windows 用户可下载并检查 PowerShell 安装脚本后，在 PowerShell 中执行，需要时确认 Windows 管理员授权提示：
 
 ```powershell
 Invoke-WebRequest https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.ps1 -OutFile install.ps1
 .\install.ps1
-# 更新 PATH 中已有的程序：
+# 更新安装并重启服务：
 .\install.ps1 -Update
 ```
 
-Windows 安装脚本校验 SHA256，默认安装到 `$env:LOCALAPPDATA\oci-mirror-proxy\bin`，需自行添加到 PATH。使用 `-Prefix C:\Tools` 可安装到 `C:\Tools\bin`，`-Version v1.0.1` 可指定版本，`-DownloadBaseUrl` 可指定仓库地址。更新前请停止程序，避免可执行文件被锁定。PowerShell 脚本不执行源码构建、订阅同步或 Windows 服务安装；`--service` 选项支持 Linux 的 systemd/OpenRC 和 macOS 的 launchd 系统服务。不带 `--service` 的 sudo 安装会以经过验证的原用户身份初始化用户配置。服务管理与历史权限问题的修复参见 [macOS 安装指南](docs/macos-installation.md)。
+安装器会启动 Windows 后台服务、设置开机自启并自动加入 PATH。
+打开新终端后即可直接运行 `oci-mirror-proxy`；更新会保留已有配置。需要 .NET Framework 4.x。
+
+服务管理和 Docker Desktop 接入见[运维指南](docs/zh-CN/operations.md)。
+其他安装选项可运行 `Get-Help .\install.ps1 -Full` 查看。
+
+`--service` 选项支持 Linux 的 systemd/OpenRC 和 macOS 的 launchd 系统服务。
+不带 `--service` 的 sudo 安装会以经过验证的原用户身份初始化用户配置。
+服务管理与历史权限问题的修复参见 [macOS 安装指南](docs/macos-installation.md)。
 
 如需使用下载镜像，将 `DOWNLOAD_BASE_URL` 设为镜像仓库根 URL（需保持相同的 `/releases` 和 `/archive` 布局）。通过管道执行脚本时，应将变量传给 `sh`，而不只是传给 `curl`：
 

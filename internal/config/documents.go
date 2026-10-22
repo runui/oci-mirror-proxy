@@ -168,7 +168,7 @@ func loadBundle(main string) (*Bundle, error) {
 	}
 	b := &Bundle{Main: main}
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		data, err := fsutil.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read config %s: %w", path, err)
 		}
@@ -366,7 +366,7 @@ func (b *Bundle) CheckUnchanged() error {
 		if !ok {
 			return fmt.Errorf("configuration added concurrently: %s", p)
 		}
-		data, err := os.ReadFile(p)
+		data, err := fsutil.ReadFile(p)
 		if err != nil {
 			return err
 		}
@@ -440,7 +440,7 @@ func Commit(path string, before, after []byte) error {
 	if err == nil && !info.Mode().IsRegular() {
 		return fmt.Errorf("refusing to modify non-regular file %s", path)
 	}
-	current, err := os.ReadFile(path)
+	current, err := fsutil.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

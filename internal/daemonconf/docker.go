@@ -18,6 +18,7 @@ const containerdDriverPrefix = "io.containerd.snapshotter"
 // Info is the subset of dockerd's GET /info response that this package reads.
 type Info struct {
 	OperatingSystem string          `json:"OperatingSystem"`
+	OSType          string          `json:"OSType"`
 	DriverStatus    [][2]string     `json:"DriverStatus"`
 	RegistryConfig  *RegistryConfig `json:"RegistryConfig"`
 }
@@ -30,6 +31,7 @@ type RegistryConfig struct {
 // FetchInfo queries dockerd's /info endpoint through its unix socket.
 func FetchInfo(ctx context.Context, socket string) (Info, error) {
 	client := unixhttp.Client(socket, 10*time.Second)
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/info", nil)
 	if err != nil {
 		return Info{}, err

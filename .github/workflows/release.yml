@@ -84,7 +84,15 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $installerAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'install.ps1'), [ref]$null, [ref]$null)
+          foreach ($name in @('Get-PersistentPath','Set-PersistentPath','Send-EnvironmentChange')) {
+            $fn = $installerAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+            . ([scriptblock]::Create($fn.Extent.Text))
+          }
+          $beforeUserPath = Get-PersistentPath 'User'
+          $beforeProcessPath = $env:PATH
           $root = Join-Path $env:RUNNER_TEMP 'installer-server'
+          $prefix = Join-Path $env:RUNNER_TEMP 'install with spaces'
           $assets = Join-Path $root "releases/download/$env:RELEASE_TAG"
           New-Item -ItemType Directory -Path $assets -Force | Out-Null
           Copy-Item dist/* -Destination $assets
@@ -96,26 +104,36 @@ jobs:
               try { Invoke-WebRequest "$url/" | Out-Null; $ready = $true; break } catch { Start-Sleep -Seconds 1 }
             }
             if (-not $ready) { throw 'Fixture server did not start.' }
-            $prefix = Join-Path $env:RUNNER_TEMP 'install with spaces'
-            ./install.ps1 -Version $env:RELEASE_TAG -Prefix $prefix -DownloadBaseUrl $url
+            ./install.ps1 -Version $env:RELEASE_TAG -Prefix $prefix -DownloadBaseUrl $url -NoService
             $binary = Join-Path $prefix 'bin/oci-mirror-proxy.exe'
             $actual = & $binary version
             if ($LASTEXITCODE -ne 0 -or $actual -ne $env:RELEASE_TAG) { throw "Unexpected version: $actual" }
             $env:PATH = (Split-Path $binary) + [IO.Path]::PathSeparator + $env:PATH
-            ./install.ps1 -Version $env:RELEASE_TAG -Update -DownloadBaseUrl $url
+            ./install.ps1 -Version $env:RELEASE_TAG -Update -DownloadBaseUrl $url -NoService
             $original = (Get-FileHash $binary).Hash
             $checksums = Join-Path $assets 'SHA256SUMS'
             (Get-Content $checksums) -replace '^[a-fA-F0-9]{64}', ('0' * 64) | Set-Content $checksums
             $rejected = $false
             try {
-              ./install.ps1 -Version $env:RELEASE_TAG -Update -DownloadBaseUrl $url
+              ./install.ps1 -Version $env:RELEASE_TAG -Update -DownloadBaseUrl $url -NoService
             } catch {
               if ($_.Exception.Message -notmatch 'SHA256 verification failed') { throw }
               $rejected = $true
             }
             if (-not $rejected -or (Get-FileHash $binary).Hash -ne $original) { throw 'Checksum failure replaced the installed executable.' }
           } finally {
+            $env:PATH = $beforeProcessPath
+            $currentPath = Get-PersistentPath 'User'
+            $cleanPath = ($currentPath -split ';' | Where-Object { $_ -ine (Join-Path $prefix 'bin') }) -join ';'
+            if ($cleanPath -cne $currentPath) {
+              if ($cleanPath -ceq ($beforeUserPath + '').TrimEnd(';')) { $cleanPath = $beforeUserPath }
+              Set-PersistentPath $cleanPath 'User'
+              Send-EnvironmentChange
+            }
             Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+            foreach ($path in @($prefix,$root)) {
+              if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+            }
           }
 
   publish:

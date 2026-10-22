@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -315,7 +316,11 @@ func TestDetectStore(t *testing.T) {
 }
 
 func TestFetchInfoOverSocket(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "omd")
+	base := ""
+	if runtime.GOOS != "windows" {
+		base = "/tmp"
+	}
+	dir, err := os.MkdirTemp(base, "omd")
 	if err != nil {
 		t.Fatal(err)
 	}

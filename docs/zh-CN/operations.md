@@ -43,6 +43,59 @@
 
 ## 配置 dockerd
 
+### Windows 与 Docker Desktop
+
+Windows 安装脚本会启动代理服务并配置开机自启。在管理员 PowerShell 中使用：
+
+```powershell
+$proxy = "$env:ProgramFiles\oci-mirror-proxy\bin\oci-mirror-proxy.exe"
+$config = "$env:ProgramData\oci-mirror-proxy\config.yaml"
+Get-Service oci-mirror-proxy
+& $proxy status --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
+& $proxy remote update --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --region cn
+# 编辑 config.yaml 后：
+& $proxy reload --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
+# 修改 listen 后：
+Restart-Service oci-mirror-proxy
+# 停止 / 启动代理：
+Stop-Service oci-mirror-proxy
+Start-Service oci-mirror-proxy
+```
+
+服务配置位于 `%ProgramData%\oci-mirror-proxy\config.yaml`，日志位于
+`%ProgramData%\oci-mirror-proxy\logs`。使用自定义服务名时，请替换命令中的服务名和管道名。
+卸载服务时先停止服务，再运行
+`& "$env:ProgramFiles\oci-mirror-proxy\service\oci-mirror-proxy.exe" uninstall`；
+配置和日志会保留。
+
+普通用户也可运行系统安装的程序，使用上述 `$proxy` 完整路径，或打开新终端直接运行 `oci-mirror-proxy`。
+安装器会自动将程序加入 PATH。
+在普通 PowerShell 中运行 `init` 和 `serve` 即使用自己的配置，不要传入系统服务的
+`--config` 或管理管道。如果服务已占用 24817 端口，启动第二个实例前请修改用户配置的
+`listen` 和 `advertise`。用户配置位于 `%APPDATA%\oci-mirror-proxy\config.yaml`。
+只有服务管理操作需要管理员 PowerShell。
+
+自动接入 Docker Desktop 时请选择本地 Linux 容器上下文，不要指定 `--store`。
+`dockerd plan/apply/revert` 合并 `%USERPROFILE%\.docker\daemon.json` 并保留其他设置，
+备份保存在 `%APPDATA%\oci-mirror-proxy\desktop-state`。只有显式指定 `--restart` 才会
+重启 Docker，也可在 Desktop 界面应用设置。自动修改拒绝远端引擎、自定义 `DOCKER_HOST`、
+`DOCKER_CONFIG` 及 Windows 容器引擎。代理地址必须能从 Docker Linux VM 访问；按需设置
+`listen`/`advertise`，不要将 VM 的回环地址当成 Windows 主机。
+
+```powershell
+& $proxy dockerd plan --config $config
+& $proxy dockerd apply --config $config
+# 手动重启 Docker Desktop，或使用 apply --restart 允许自动重启。
+& $proxy doctor --config $config
+# 撤销配置修改：
+& $proxy dockerd revert --config $config
+```
+
+显式 `--store` 离线模式使用 `%ProgramData%\docker` 下的路径，需手动激活。
+Windows 引擎不支持 `--rootless`、`--pid-file`。
+
+### Linux Docker Engine
+
 1. 确保代理已运行，且 dockerd 能通过预期地址访问它。`doctor` 会检查这一点。
 2. 执行 `dockerd plan`，检查列出的文件。此时不会写入任何内容。
 3. 执行 `dockerd apply`。文件会原子写入，已有文件备份到 `<state-dir>/backups/`。除非传入 `--force`，否则拒绝覆盖非本工具创建的文件。

@@ -233,6 +233,7 @@ func TestDefaultDockerPathsRootlessUsesUserDirectories(t *testing.T) {
 	home := t.TempDir()
 	runtimeDir := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("XDG_STATE_HOME", "")
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)

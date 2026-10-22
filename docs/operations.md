@@ -45,6 +45,67 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error.
 
 ## Setting up dockerd
 
+### Windows and Docker Desktop
+
+The Windows installer starts the proxy as an automatically started Windows
+service. In an Administrator PowerShell, use:
+
+```powershell
+$proxy = "$env:ProgramFiles\oci-mirror-proxy\bin\oci-mirror-proxy.exe"
+$config = "$env:ProgramData\oci-mirror-proxy\config.yaml"
+Get-Service oci-mirror-proxy
+& $proxy status --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
+& $proxy remote update --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --region cn
+# After editing config.yaml:
+& $proxy reload --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
+# After changing listen:
+Restart-Service oci-mirror-proxy
+# Stop / start the proxy:
+Stop-Service oci-mirror-proxy
+Start-Service oci-mirror-proxy
+```
+
+Service configuration is `%ProgramData%\oci-mirror-proxy\config.yaml` and logs
+are in `%ProgramData%\oci-mirror-proxy\logs`. With a custom service name, replace
+the service name and pipe name in these commands. To remove the service, stop it
+and run `& "$env:ProgramFiles\oci-mirror-proxy\service\oci-mirror-proxy.exe" uninstall`;
+configuration and logs are kept.
+
+The system-installed executable is also usable without elevation. Use the full
+`$proxy` path above, or open a new terminal and run `oci-mirror-proxy` directly:
+the installer adds the program to PATH. Run `init` and
+`serve` from a normal PowerShell to use your own configuration; do not pass the
+system service's `--config` or admin pipe. If the service is already using port
+24817, change `listen` and `advertise` in your user configuration before starting
+a second instance. User configuration is stored in
+`%APPDATA%\oci-mirror-proxy\config.yaml`. Only service administration needs an
+Administrator PowerShell.
+
+For automatic Docker Desktop integration, select the local Linux-container
+context and leave `--store` unset. `dockerd plan/apply/revert` merges
+`%USERPROFILE%\.docker\daemon.json`, preserves unrelated settings, and stores
+backups under `%APPDATA%\oci-mirror-proxy\desktop-state`. Applying does not restart
+Docker unless `--restart` is explicitly supplied; alternatively activate the
+settings through Docker Desktop. Remote engines, custom `DOCKER_HOST` or
+`DOCKER_CONFIG`, and Windows-container Desktop engines are rejected for automatic
+local edits. The proxy address must be reachable from Docker's Linux VM; set
+`listen`/`advertise` accordingly instead of assuming VM loopback is the host.
+
+```powershell
+& $proxy dockerd plan --config $config
+& $proxy dockerd apply --config $config
+# Restart Docker Desktop manually, or use apply --restart to allow a restart.
+& $proxy doctor --config $config
+# To undo the configuration change:
+& $proxy dockerd revert --config $config
+```
+
+Explicit offline `--store` workflows use paths under `%ProgramData%\docker` and
+require manual activation. `--rootless` and `--pid-file` are not supported for
+Windows engines.
+
+### Linux Docker Engine
+
 1. Make sure the proxy is running and reachable at the address dockerd will use.
    `doctor` checks this step.
 2. Run `dockerd plan`. Read the files it shows. Nothing is written yet.

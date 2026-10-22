@@ -1,4 +1,4 @@
-// Package admin exposes runtime management over a private unix socket. Access
+// Package admin exposes runtime management over a private local IPC endpoint. Access
 // control is file permission on the socket, so no tokens are involved.
 package admin
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -83,7 +84,7 @@ func TestAtomicReadersNeverObservePartialReplacement(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		for {
-			data, err := os.ReadFile(path)
+			data, err := ReadFile(path)
 			if err != nil || (!bytes.Equal(data, old) && !bytes.Equal(data, next)) {
 				failures <- errors.New("reader observed a partial or missing file")
 				return
@@ -120,7 +121,7 @@ func TestAtomicReadersNeverObservePartialReplacement(t *testing.T) {
 	default:
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("file permissions: %v %v", info, err)
 	}
 }

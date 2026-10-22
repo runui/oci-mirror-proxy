@@ -1,10 +1,92 @@
 #Requires -Version 5.1
+
+<#
+.SYNOPSIS
+Install or update oci-mirror-proxy and its Windows service.
+.DESCRIPTION
+Requests UAC approval when needed to install and start the automatic service.
+The default installation uses WinSW v2.12.0 (.NET Framework 4.x required), starts
+the service automatically at boot and configures failure recovery. Downloads are
+verified with SHA256. Existing configuration is preserved; failed service updates
+restore the previous binary. The installer does not edit or restart Docker and
+does not synchronize subscriptions.
+
+The binary directory is added to system PATH for service installs and current-user
+PATH with NoService. Existing entries are preserved and duplicate additions are
+avoided. Open a new terminal after installation. Standard users can execute the
+system-installed binary and use their own configuration, but service management
+and service configuration require administrator privileges.
+.PARAMETER Prefix
+Dedicated application directory. Defaults to %ProgramFiles%\oci-mirror-proxy
+for service installs, or %LOCALAPPDATA%\oci-mirror-proxy with NoService. The
+executable is placed in its bin subdirectory. Service installs require local,
+non-reparse paths. Prefix and the configuration directory must not overlap.
+.PARAMETER Version
+Release tag, such as v1.0.1. Defaults to VERSION, or latest. Local source builds
+use dev when Version is latest; an explicit tag is embedded in the binary.
+.PARAMETER DownloadBaseUrl
+Repository root URL with /releases and /archive layouts. Defaults to
+DOWNLOAD_BASE_URL, or https://git.zmide.com/bin/oci-mirror-proxy. Release archives
+must include SHA256SUMS. Not used for a recognized local source build.
+.PARAMETER Update
+Update an existing installation and restart its service while preserving config.
+Use the same Prefix, Config and ServiceName for a custom service installation.
+With NoService and no explicit Prefix, update the executable found on PATH.
+.PARAMETER Config
+Service configuration file. Defaults to %ProgramData%\<ServiceName>\config.yaml.
+Use a dedicated directory separate from Prefix; it and its logs are restricted
+to SYSTEM and Administrators. Not used with NoService.
+.PARAMETER ServiceName
+Windows service name. Defaults to oci-mirror-proxy. Also determines the default
+configuration directory and the service admin pipe. Custom service definitions
+or accounts are not overwritten.
+.PARAMETER NoService
+Install only the binary, without registering a service or changing service ACLs.
+Never requests elevation. Adds bin to the current user's PATH and does not create
+configuration; run oci-mirror-proxy init and serve as that user when needed.
+.PARAMETER WinSWDownloadBaseUrl
+HTTPS repository root for the pinned WinSW release, with the same release layout
+as https://github.com/winsw/winsw. Downloaded wrappers must match the pinned hash.
+.PARAMETER Build
+Compile using Go instead of downloading a prebuilt binary. From this project's
+source root, build the current working tree without fetching release metadata;
+otherwise download the selected release source archive. Requires Go 1.26.8 or a
+compatible auto-downloaded toolchain. Can be combined with Update or NoService.
+Download failures do not fall back to a source build unless Build is specified.
+Service builds use temporary caches rather than modifying the caller's caches.
+.PARAMETER NoElevate
+Fail immediately when a service install lacks administrator privileges instead
+of requesting UAC approval. Useful for unattended jobs. Canceling a UAC prompt
+aborts installation; NoService never prompts, regardless of this setting.
+.EXAMPLE
+.\install.ps1
+Install the latest release as an automatic Windows service; approve UAC if asked.
+.EXAMPLE
+.\install.ps1 -Update
+Update the default installation, preserving its service configuration.
+.EXAMPLE
+.\install.ps1 -NoService
+Install for the current user without a Windows service or an elevation prompt.
+.EXAMPLE
+.\install.ps1 -Build -Update
+Build local source when run from its root, otherwise build the selected release,
+then update the installation.
+.EXAMPLE
+.\install.ps1 -Prefix C:\Apps\oci-mirror-proxy -Config C:\ProxyData\config.yaml -ServiceName my-proxy -Version v1.0.1
+Install a selected release with dedicated custom application and data directories.
+#>
 [CmdletBinding()]
 param(
-    [string]$Prefix = (Join-Path $env:LOCALAPPDATA 'oci-mirror-proxy'),
+    [string]$Prefix = (Join-Path $env:ProgramFiles 'oci-mirror-proxy'),
     [string]$Version = $(if ($env:VERSION) { $env:VERSION } else { 'latest' }),
     [string]$DownloadBaseUrl = $(if ($env:DOWNLOAD_BASE_URL) { $env:DOWNLOAD_BASE_URL } else { 'https://git.zmide.com/bin/oci-mirror-proxy' }),
-    [switch]$Update
+    [switch]$Update,
+    [string]$Config = '',
+    [string]$ServiceName = 'oci-mirror-proxy',
+    [switch]$NoService,
+    [string]$WinSWDownloadBaseUrl = 'https://github.com/winsw/winsw',
+    [switch]$Build,
+    [switch]$NoElevate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,10 +95,242 @@ if ($env:OS -ne 'Windows_NT') { throw 'Use install.sh on Unix systems.' }
 $repo = $DownloadBaseUrl.TrimEnd('/')
 if ($repo -notmatch '^https?://') { throw 'DownloadBaseUrl must be an HTTP or HTTPS repository root URL.' }
 if ($Version -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._+-]*$') { throw 'Invalid release tag.' }
-if (-not [IO.Path]::IsPathRooted($Prefix)) { throw 'Prefix must be an absolute path.' }
+if ($ServiceName -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$') { throw 'Invalid service name.' }
 
+function Resolve-InstallPath([string]$Path) {
+    # Require a local, fully qualified path, not drive-relative or UNC paths.
+    # WinSW expands %variables% in XML, so do not accept them in literal paths.
+    if ($Path -notmatch '^[a-zA-Z]:[\\/]' -or $Path -match '["%;\r\n]') {
+        throw "Expected an absolute local path without quotes, semicolons or percent signs: $Path"
+    }
+    return [IO.Path]::GetFullPath($Path)
+}
+
+function Test-IsAdministrator {
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Invoke-ElevatedInstaller([string]$ScriptPath, [hashtable]$Parameters, [string]$GoPath) {
+    if (-not $ScriptPath -or -not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+        throw 'Save install.ps1 to a local file before requesting administrator approval.'
+    }
+    # Data, not command-line interpolation: preserve empty strings, Unicode,
+    # switch false values and explicit parameter membership across PowerShell editions.
+    $values = @{}
+    foreach ($key in $Parameters.Keys) {
+        $value = $Parameters[$key]
+        if ($value -is [Management.Automation.SwitchParameter]) { $value = [bool]$value }
+        $values[$key] = $value
+    }
+    $values['NoElevate'] = $true
+    $data = @{ Script = $ScriptPath; Parameters = $values; GoPath = $GoPath; BuildDirectory = $(if ($Parameters['Build']) { (Get-Location).ProviderPath } else { '' }) } | ConvertTo-Json -Depth 5 -Compress
+    $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($data))
+    $bootstrap = @'
+$ErrorActionPreference = 'Stop'
+try {
+    $data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
+    $parameters = @{}
+    foreach ($property in $data.Parameters.PSObject.Properties) { $parameters[$property.Name] = $property.Value }
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Administrator approval did not provide administrator privileges.' }
+    # Resolve the elevated identity's temp directory, not an inherited path
+    # belonging to the invoking user (UAC may use another administrator account).
+    $temp = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'
+    [IO.Directory]::CreateDirectory($temp) > $null
+    $env:TEMP = $temp
+    $env:TMP = $temp
+    if ($data.GoPath) {
+        if (-not (Test-Path -LiteralPath $data.GoPath -PathType Leaf)) { throw 'The selected Go executable is unavailable to the administrator account.' }
+        $env:PATH = (Split-Path -Parent $data.GoPath) + [IO.Path]::PathSeparator + $env:PATH
+    }
+    if ($data.BuildDirectory) { Set-Location -LiteralPath $data.BuildDirectory }
+    & $data.Script @parameters
+    exit 0
+} catch {
+    [Console]::Error.WriteLine($_.ToString())
+    exit 1
+}
+'@
+    $bootstrap = $bootstrap.Replace('__PAYLOAD__', $payload)
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+    if ($encoded.Length -gt 28000) { throw 'Installation arguments are too long for a Windows elevation command.' }
+    $shell = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'powershell.exe' }
+    Write-Host 'Requesting administrator approval. Installation continues in a separate window; waiting for its result...'
+    try {
+        $process = Start-Process -FilePath $shell -Verb RunAs -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', $encoded) -WorkingDirectory $env:SystemRoot -Wait -PassThru -ErrorAction Stop
+        try { return $process.ExitCode } finally { $process.Dispose() }
+    } catch {
+        $cause = $_.Exception
+        while ($cause) {
+            if ($cause -is [ComponentModel.Win32Exception] -and $cause.NativeErrorCode -eq 1223) {
+                throw 'Administrator approval was canceled. Nothing was installed.'
+            }
+            $cause = $cause.InnerException
+        }
+        throw
+    }
+}
+
+function Assert-NoReparsePoint([string]$Path) {
+    while ($Path) {
+        if ((Test-Path -LiteralPath $Path) -and ((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "Service paths must not contain reparse points: $Path"
+        }
+        $parent = Split-Path -Parent $Path
+        if ($parent -eq $Path) { break }
+        $Path = $parent
+    }
+}
+
+function New-ServiceDefinition {
+    # Like the launchd/systemd definitions in install.sh, invoke the existing
+    # foreground command. WinSW supplies the SCM lifecycle, logging and Ctrl+C.
+    $exe = [Security.SecurityElement]::Escape($destination)
+    $arguments = [Security.SecurityElement]::Escape("serve --config `"$Config`" --admin-socket `"$adminPipe`"")
+    $workingDir = [Security.SecurityElement]::Escape((Split-Path -Parent $Config))
+    $logs = [Security.SecurityElement]::Escape($logDir)
+    return @"
+<!-- Managed by oci-mirror-proxy install.ps1 -->
+<service>
+  <id>$ServiceName</id>
+  <name>$ServiceName</name>
+  <description>OCI registry mirror proxy</description>
+  <executable>$exe</executable>
+  <arguments>$arguments</arguments>
+  <workingdirectory>$workingDir</workingdirectory>
+  <startmode>Automatic</startmode>
+  <stoptimeout>15 sec</stoptimeout>
+  <onfailure action="restart" delay="5 sec"/>
+  <resetfailure>1 day</resetfailure>
+  <logpath>$logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>3</keepFiles>
+  </log>
+</service>
+"@
+}
+
+function Invoke-WinSW([string]$Command) {
+    & $wrapper $Command
+    if ($LASTEXITCODE -ne 0) { throw "WinSW $Command failed (exit $LASTEXITCODE)." }
+}
+
+function Stop-ProxyService {
+    $controller = Get-Service -Name $ServiceName -ErrorAction Stop
+    if ($controller.Status -ne 'Stopped') {
+        Stop-Service -Name $ServiceName -ErrorAction Stop
+        $controller.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(45))
+    }
+    $controller.Dispose()
+}
+
+function Test-ProxyReady {
+    # Windows PowerShell 5.1 can turn native stderr into an ErrorRecord. A
+    # refused connection while starting is a retry, not an installation error.
+    $ErrorActionPreference = 'Continue'
+    & $destination status --admin-socket $adminPipe *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Publish-File([string]$Source, [string]$Destination) {
+    if (Test-Path -LiteralPath $Destination) {
+        [IO.File]::Replace($Source, $Destination, [System.Management.Automation.Language.NullString]::Value)
+    } else {
+        [IO.File]::Move($Source, $Destination)
+    }
+}
+
+function Get-PersistentPath([string]$Target) {
+    $hive = if ($Target -eq 'Machine') { [Microsoft.Win32.Registry]::LocalMachine } else { [Microsoft.Win32.Registry]::CurrentUser }
+    $keyName = if ($Target -eq 'Machine') { 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment' } else { 'Environment' }
+    $key = $hive.OpenSubKey($keyName)
+    if (-not $key) { return $null }
+    try { return $key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } finally { $key.Dispose() }
+}
+
+function Set-PersistentPath([AllowNull()][string]$Value, [string]$Target) {
+    $hive = if ($Target -eq 'Machine') { [Microsoft.Win32.Registry]::LocalMachine } else { [Microsoft.Win32.Registry]::CurrentUser }
+    $keyName = if ($Target -eq 'Machine') { 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment' } else { 'Environment' }
+    $key = $hive.CreateSubKey($keyName)
+    try {
+        if ($null -eq $Value -or $Value -eq '') { $key.DeleteValue('Path', $false); return }
+        $kind = if ($key.GetValueNames() -contains 'Path') { $key.GetValueKind('Path') } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+        $key.SetValue('Path', $Value, $kind)
+    } finally { $key.Dispose() }
+}
+
+function Send-EnvironmentChange {
+    # Explorer and other interested applications refresh the environment for
+    # future processes. Existing terminals cannot have their PATH changed here.
+    try {
+        if (-not ('OciMirrorProxy.InstallerEnvironment' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace OciMirrorProxy {
+    public static class InstallerEnvironment {
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr SendMessageTimeout(IntPtr window, uint message, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);
+    }
+}
+'@
+        }
+        $result = [UIntPtr]::Zero
+        $sent = [OciMirrorProxy.InstallerEnvironment]::SendMessageTimeout([IntPtr]0xffff, 0x001a, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result)
+        if ($sent -eq [IntPtr]::Zero) { Write-Warning 'PATH was saved, but the environment notification timed out. Sign out and back in if new terminals do not see it.' }
+    } catch { Write-Warning "PATH was saved, but its environment notification failed: $_" }
+}
+
+function Add-BinaryPath {
+    $script:pathTarget = if ($NoService) { 'User' } else { 'Machine' }
+    $script:previousPath = Get-PersistentPath $pathTarget
+    # Expand only for comparison. Keep existing entries and their order intact.
+    $present = @($previousPath -split ';' | Where-Object {
+        [Environment]::ExpandEnvironmentVariables($_.Trim().Trim('"')).TrimEnd('\') -ieq $binDir.TrimEnd('\')
+    }).Count -gt 0
+    if ($present) { return }
+    $separator = if ($previousPath -and -not $previousPath.EndsWith(';')) { ';' } else { '' }
+    $script:installedPath = $previousPath + $separator + $binDir
+    Set-PersistentPath $installedPath $pathTarget
+    $script:pathChanged = $true
+    Send-EnvironmentChange
+}
+
+function Restore-BinaryPath {
+    if ($pathChanged) {
+        # Never overwrite another process's concurrent environment edits.
+        if ((Get-PersistentPath $pathTarget) -ceq $installedPath) {
+            Set-PersistentPath $previousPath $pathTarget
+            Send-EnvironmentChange
+        } else { Write-Warning 'PATH changed concurrently; leaving it untouched during rollback.' }
+    }
+}
+
+function Protect-ServicePath([string]$Path, [switch]$Directory, [switch]$ReadUsers) {
+    $acl = if ($Directory) { New-Object Security.AccessControl.DirectorySecurity } else { New-Object Security.AccessControl.FileSecurity }
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545')) {
+        if ($sid -eq 'S-1-5-32-545' -and -not $ReadUsers) { continue }
+        $rights = if ($sid -eq 'S-1-5-32-545') { 'ReadAndExecute' } else { 'FullControl' }
+        $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+        $rule = if ($Directory) {
+            New-Object Security.AccessControl.FileSystemAccessRule($identity, $rights, 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        } else {
+            New-Object Security.AccessControl.FileSystemAccessRule($identity, $rights, 'Allow')
+        }
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+if ($NoService -and -not $PSBoundParameters.ContainsKey('Prefix')) {
+    $Prefix = Join-Path $env:LOCALAPPDATA 'oci-mirror-proxy'
+}
+$Prefix = (Resolve-InstallPath $Prefix).TrimEnd('\')
 $binDir = Join-Path $Prefix 'bin'
-if ($Update -and -not $PSBoundParameters.ContainsKey('Prefix')) {
+if ($NoService -and $Update -and -not $PSBoundParameters.ContainsKey('Prefix')) {
     $existing = Get-Command oci-mirror-proxy.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
     $binDir = Split-Path -Parent $existing.Source
 }
@@ -25,7 +339,67 @@ if ((Test-Path -LiteralPath $destination) -and ((Get-Item -LiteralPath $destinat
     throw "Refusing to replace symlink $destination."
 }
 
-# PROCESSOR_ARCHITEW6432 identifies the native OS when running a 32-bit shell.
+$existingService = $null
+if (-not $NoService) {
+    if (-not $Config) { $Config = Join-Path (Join-Path $env:ProgramData $ServiceName) 'config.yaml' }
+    $Config = Resolve-InstallPath $Config
+    $configDir = Split-Path -Parent $Config
+    # Separate public executable traversal from private service data, including
+    # custom installs. Overlap would either hide bin or expose service data.
+    if ($configDir -ieq $Prefix -or $configDir.StartsWith($Prefix + '\', [StringComparison]::OrdinalIgnoreCase) -or $Prefix.StartsWith($configDir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Prefix and Config must use separate, non-overlapping application directories.'
+    }
+    if (-not (Test-IsAdministrator)) {
+        if ($NoElevate) { throw 'Service installation requires Administrator privileges; -NoElevate disables UAC. Run as Administrator or use -NoService.' }
+        $elevationParameters = @{}
+        foreach ($key in $PSBoundParameters.Keys) { $elevationParameters[$key] = $PSBoundParameters[$key] }
+        # Freeze environment-derived defaults before a different administrator
+        # account is selected. NoService never takes this branch.
+        foreach ($key in @('Prefix', 'Config', 'Version', 'DownloadBaseUrl', 'WinSWDownloadBaseUrl', 'ServiceName')) {
+            $elevationParameters[$key] = Get-Variable -Name $key -ValueOnly
+        }
+        $goPath = ''
+        if ($Build) {
+            $go = Get-Command go -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $go) { throw '-Build requires Go; install Go to compile from source.' }
+            $goPath = $go.Source
+        }
+        $code = Invoke-ElevatedInstaller $PSCommandPath $elevationParameters $goPath
+        if ($code -ne 0) { Write-Host "Elevated installation failed (exit $code)." }
+        exit $code
+    }
+    # Never replace ACLs on shared system directories or a drive root.
+    foreach ($dir in @($Prefix, $configDir)) {
+        if ($dir.TrimEnd('\') -in @([IO.Path]::GetPathRoot($dir).TrimEnd('\'), $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData, $env:SystemRoot, $env:USERPROFILE)) {
+            throw 'Prefix and Config must use dedicated application directories.'
+        }
+    }
+    $serviceDir = Join-Path $Prefix 'service'
+    $wrapper = Join-Path $serviceDir "$ServiceName.exe"
+    $serviceFile = Join-Path $serviceDir "$ServiceName.xml"
+    $logDir = Join-Path $configDir 'logs'
+    $adminPipe = "\\.\pipe\$ServiceName-admin"
+    $definition = New-ServiceDefinition
+    $serviceCommand = '"' + $wrapper + '"'
+    foreach ($path in @($destination, $wrapper, $serviceFile, $Config, $logDir)) { Assert-NoReparsePoint $path }
+    $existingService = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
+    if ($existingService -and ($existingService.PathName -cne $serviceCommand -or $existingService.StartName -notin @('LocalSystem', 'NT AUTHORITY\SYSTEM'))) {
+        throw "Service $ServiceName is not managed by this installation; use its original -Prefix or choose another -ServiceName."
+    }
+    if ($existingService -and -not (Test-Path -LiteralPath $serviceFile)) { throw 'Existing service has no managed definition.' }
+    if ((Test-Path -LiteralPath $serviceFile) -and [IO.File]::ReadAllText($serviceFile) -cne $definition) {
+        throw "$serviceFile differs from the generated definition; manage this service manually."
+    }
+    if ((Test-Path -LiteralPath $wrapper) -and -not (Test-Path -LiteralPath $serviceFile)) { throw 'Existing wrapper has no managed definition.' }
+    $WinSWDownloadBaseUrl = $WinSWDownloadBaseUrl.TrimEnd('/')
+    if ($WinSWDownloadBaseUrl -notmatch '^https://') { throw 'WinSWDownloadBaseUrl must use HTTPS.' }
+    # AnyCPU .NET Framework build works on both amd64 and Windows ARM64.
+    $wrapperHash = '923111C7142B3DC783A3C722B19B8A21BCB78222D7A136AC33F0CA8A29F4CB66'
+    if ((Test-Path -LiteralPath $wrapper) -and (Get-FileHash -LiteralPath $wrapper -Algorithm SHA256).Hash -ne $wrapperHash) {
+        throw 'Existing WinSW executable differs from the pinned version; refusing to overwrite it.'
+    }
+}
+
 $nativeArch = $env:PROCESSOR_ARCHITEW6432
 if (-not $nativeArch) { $nativeArch = $env:PROCESSOR_ARCHITECTURE }
 $arch = switch ($nativeArch) {
@@ -35,8 +409,33 @@ $arch = switch ($nativeArch) {
 }
 $tempDir = Join-Path ([IO.Path]::GetTempPath()) ('oci-mirror-proxy-install-' + [Guid]::NewGuid().ToString('N'))
 $staged = $null
+$published = $false
+$serviceCreated = $false
+$serviceInstallAttempted = $false
+$serviceTouched = $false
+$wrapperCreated = $false
+$definitionCreated = $false
+$configCreated = $false
+$hadBinary = Test-Path -LiteralPath $destination
+$backup = Join-Path $tempDir 'previous.exe'
+$savedACLs = @{}
+$createdDirs = @()
+$pathChanged = $false
 New-Item -ItemType Directory -Path $tempDir | Out-Null
 try {
+    $sourceDir = $null
+    if ($Build) {
+        $currentDir = (Get-Location).ProviderPath
+        $moduleFile = Join-Path $currentDir 'go.mod'
+        if ((Test-Path -LiteralPath $moduleFile -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $currentDir 'cmd/oci-mirror-proxy') -PathType Container) -and
+            ([IO.File]::ReadAllText($moduleFile) -match '(?m)^module\s+github\.com/runui/oci-mirror-proxy\s*\r?$')) {
+            $sourceDir = $currentDir
+            # Local source is not necessarily a published release. Do not resolve
+            # latest over the network or label the working tree as that release.
+            if ($Version -eq 'latest') { $Version = 'dev' }
+        }
+    }
     if ($Version -eq 'latest') {
         $response = Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/latest"
         $uri = $response.BaseResponse.ResponseUri
@@ -46,38 +445,204 @@ try {
         }
         $Version = $Matches[1]
     }
-    $asset = "oci-mirror-proxy_${Version}_windows_${arch}.zip"
-    $archive = Join-Path $tempDir $asset
-    Write-Host "Downloading $asset..."
-    Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/download/$Version/$asset" -OutFile $archive
-    $checksums = Join-Path $tempDir 'SHA256SUMS'
-    Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/download/$Version/SHA256SUMS" -OutFile $checksums
-    $pattern = '^([a-fA-F0-9]{64})\s+\*?(?:\./)?' + [regex]::Escape($asset) + '$'
-    $expected = @(Get-Content -LiteralPath $checksums | ForEach-Object {
-        if ($_ -match $pattern) { $Matches[1] }
-    })
-    if ($expected.Count -ne 1) { throw "Missing or invalid checksum for $asset." }
-    if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected[0]) {
-        throw 'SHA256 verification failed; installation aborted.'
+    if ($Build) {
+        $go = Get-Command go -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $go) { throw '-Build requires Go; install Go to compile from source.' }
+        if ($sourceDir) {
+            Write-Host "Building local source from $sourceDir ($Version) for windows/$arch..."
+        } else {
+            Write-Host "Building release $Version for windows/$arch..."
+            $archive = Join-Path $tempDir 'source.zip'
+            Invoke-WebRequest -UseBasicParsing -Uri "$repo/archive/$Version.zip" -OutFile $archive
+            $extracted = Join-Path $tempDir 'source'
+            Expand-Archive -LiteralPath $archive -DestinationPath $extracted
+            $roots = @(Get-ChildItem -LiteralPath $extracted -Force)
+            if ($roots.Count -ne 1 -or -not $roots[0].PSIsContainer -or -not (Test-Path -LiteralPath (Join-Path $roots[0].FullName 'go.mod') -PathType Leaf)) {
+                throw 'Unexpected source archive layout.'
+            }
+            $sourceDir = $roots[0].FullName
+        }
+        $binary = Join-Path $tempDir 'oci-mirror-proxy.exe'
+        $savedBuildEnv = @{}
+        $buildEnvNames = @('CGO_ENABLED', 'GOOS', 'GOARCH')
+        if (-not $NoService) { $buildEnvNames += @('GOCACHE', 'GOMODCACHE', 'GOPATH', 'GOTMPDIR', 'GOENV', 'GOWORK', 'GOFLAGS') }
+        foreach ($name in $buildEnvNames) {
+            $savedBuildEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        }
+        Push-Location -LiteralPath $sourceDir
+        try {
+            $env:CGO_ENABLED = '0'
+            $env:GOOS = 'windows'
+            $env:GOARCH = $arch
+            if (-not $NoService) {
+                # An elevated build must not leave administrator-owned files in
+                # the invoking user's caches or consult their persisted go env.
+                $env:GOCACHE = Join-Path $tempDir 'gocache'
+                $env:GOPATH = Join-Path $tempDir 'gopath'
+                $env:GOMODCACHE = Join-Path $env:GOPATH 'pkg\mod'
+                $env:GOTMPDIR = $tempDir
+                $env:GOENV = 'off'
+                $env:GOWORK = 'off'
+                $env:GOFLAGS = ''
+            }
+            & $go.Source build -trimpath -ldflags "-s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version=$Version" -o $binary ./cmd/oci-mirror-proxy
+            if ($LASTEXITCODE -ne 0) { throw "Source build failed (exit $LASTEXITCODE)." }
+            if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Source build did not produce the executable.' }
+        } finally {
+            Pop-Location
+            foreach ($name in $savedBuildEnv.Keys) {
+                if ($null -eq $savedBuildEnv[$name]) {
+                    Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+                } else {
+                    [Environment]::SetEnvironmentVariable($name, $savedBuildEnv[$name], 'Process')
+                }
+            }
+        }
+    } else {
+        $asset = "oci-mirror-proxy_${Version}_windows_${arch}.zip"
+        $archive = Join-Path $tempDir $asset
+        Write-Host "Downloading $asset..."
+        Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/download/$Version/$asset" -OutFile $archive
+        $checksums = Join-Path $tempDir 'SHA256SUMS'
+        Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/download/$Version/SHA256SUMS" -OutFile $checksums
+        $pattern = '^([a-fA-F0-9]{64})\s+\*?(?:\./)?' + [regex]::Escape($asset) + '$'
+        $expected = @(Get-Content -LiteralPath $checksums | ForEach-Object { if ($_ -match $pattern) { $Matches[1] } })
+        if ($expected.Count -ne 1) { throw "Missing or invalid checksum for $asset." }
+        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected[0]) {
+            throw 'SHA256 verification failed; installation aborted.'
+        }
+        $extracted = Join-Path $tempDir 'extracted'
+        Expand-Archive -LiteralPath $archive -DestinationPath $extracted
+        $binary = Join-Path $extracted 'oci-mirror-proxy.exe'
+        if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Release archive is missing the executable.' }
     }
-    $extracted = Join-Path $tempDir 'extracted'
-    Expand-Archive -LiteralPath $archive -DestinationPath $extracted
-    $binary = Join-Path $extracted 'oci-mirror-proxy.exe'
-    if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Release archive is missing the executable.' }
-    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+    if (-not $NoService) {
+        $wrapperDownload = Join-Path $tempDir 'WinSW.exe'
+        if (-not (Test-Path -LiteralPath $wrapper)) {
+            Invoke-WebRequest -UseBasicParsing -Uri "$WinSWDownloadBaseUrl/releases/download/v2.12.0/WinSW.NET4.exe" -OutFile $wrapperDownload
+            if ((Get-FileHash -LiteralPath $wrapperDownload -Algorithm SHA256).Hash -ne $wrapperHash) { throw 'WinSW SHA256 verification failed.' }
+        }
+        foreach ($dir in @($Prefix, $binDir, $serviceDir, $configDir, $logDir)) {
+            if (-not (Test-Path -LiteralPath $dir)) {
+                New-Item -ItemType Directory -Path $dir -Force | Out-Null
+                $createdDirs += $dir
+            } else { $savedACLs[$dir] = Get-Acl -LiteralPath $dir }
+            Protect-ServicePath $dir -Directory -ReadUsers:($dir -in @($Prefix, $binDir))
+        }
+        if (Test-Path -LiteralPath $Config) {
+            $savedACLs[$Config] = Get-Acl -LiteralPath $Config
+            Protect-ServicePath $Config
+        }
+        foreach ($path in @($wrapper, $serviceFile)) {
+            if (Test-Path -LiteralPath $path) {
+                $savedACLs[$path] = Get-Acl -LiteralPath $path
+                Protect-ServicePath $path
+            }
+        }
+    } else { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
     $staged = Join-Path $binDir ('.oci-mirror-proxy-' + [Guid]::NewGuid().ToString('N') + '.exe')
     Copy-Item -LiteralPath $binary -Destination $staged
-    # Windows locks running executables; fail without deleting the installed binary.
-    if (Test-Path -LiteralPath $destination) {
-        # PowerShell converts $null to an empty string for .NET string parameters.
-        [IO.File]::Replace($staged, $destination, [System.Management.Automation.Language.NullString]::Value)
-    } else {
-        [IO.File]::Move($staged, $destination)
+    if (-not $NoService) {
+        Protect-ServicePath $staged -ReadUsers
+        if (-not (Test-Path -LiteralPath $Config)) {
+            $configCreated = $true
+            & $staged init --config $Config --admin-socket $adminPipe
+            if ($LASTEXITCODE -ne 0) { throw 'Configuration initialization failed.' }
+        }
+        if ($existingService) {
+            $wasRunning = (Get-Service -Name $ServiceName).Status -ne 'Stopped'
+            $serviceTouched = $true
+            Stop-ProxyService
+        }
     }
+    if ($hadBinary) {
+        Copy-Item -LiteralPath $destination -Destination $backup
+        if (-not $NoService) { $savedACLs[$destination] = Get-Acl -LiteralPath $destination }
+    }
+    Publish-File $staged $destination
     $staged = $null
-    Write-Host "Installed $destination ($Version)"
-    Write-Host "Add $binDir to PATH, then run: oci-mirror-proxy serve"
-    Write-Host 'Configuration preserved. Windows service installation is not managed by this script.'
+    $published = $true
+    if ($NoService) {
+        Add-BinaryPath
+        Write-Host "Installed $destination ($Version). $binDir is in user PATH; open a new terminal to use oci-mirror-proxy."
+    } else {
+        Protect-ServicePath $destination -ReadUsers
+        if (-not (Test-Path -LiteralPath $wrapper)) {
+            Copy-Item -LiteralPath $wrapperDownload -Destination $wrapper
+            $wrapperCreated = $true
+            Protect-ServicePath $wrapper
+        }
+        if (-not (Test-Path -LiteralPath $serviceFile)) {
+            [IO.File]::WriteAllText($serviceFile, $definition, (New-Object Text.UTF8Encoding($false)))
+            $definitionCreated = $true
+            Protect-ServicePath $serviceFile
+        }
+        if (-not $existingService) {
+            $serviceInstallAttempted = $true
+            Invoke-WinSW 'install'
+            $serviceCreated = $true
+        }
+        Set-Service -Name $ServiceName -StartupType Automatic
+        Start-Service -Name $ServiceName
+        $ready = $false
+        for ($i = 0; $i -lt 30; $i++) {
+            if ((Test-ProxyReady) -and (Get-Service -Name $ServiceName).Status -eq 'Running') { $ready = $true; break }
+            Start-Sleep -Milliseconds 500
+        }
+        if (-not $ready) { throw "Service did not become ready. Check $logDir" }
+        Add-BinaryPath
+        Write-Host "Installed $destination ($Version). Service $ServiceName is running and enabled at boot."
+        Write-Host "Configuration: $Config"
+        Write-Host "Logs: $logDir"
+        Write-Host "User CLI (no elevation required): & '$destination' version"
+        Write-Host 'The binary directory is in system PATH. Open a new terminal to use oci-mirror-proxy as a normal user.'
+        Write-Host 'User configuration remains separate; use init and serve as your normal user. Only service administration requires elevation.'
+        Write-Host "Manage: Get-Service $ServiceName; Restart-Service $ServiceName; Stop-Service $ServiceName"
+        Write-Host "Admin CLI: & '$destination' status --config '$Config' --admin-socket '$adminPipe'"
+    }
+} catch {
+    $failure = $_
+    try { Restore-BinaryPath } catch { Write-Warning "PATH rollback failed: $_" }
+    if (-not $NoService) {
+        try {
+            if ($serviceInstallAttempted -and -not $serviceCreated) {
+                $partial = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
+                $serviceCreated = $partial -and $partial.PathName -ceq $serviceCommand
+            }
+            if ($serviceCreated -or ($existingService -and $serviceTouched)) { Stop-ProxyService }
+            if ($serviceCreated) { Invoke-WinSW 'uninstall' }
+            if ($published) {
+                if ($hadBinary) {
+                    $restore = Join-Path $binDir ('.oci-mirror-proxy-' + [Guid]::NewGuid().ToString('N') + '.exe')
+                    Copy-Item -LiteralPath $backup -Destination $restore
+                    Publish-File $restore $destination
+                } else { Remove-Item -LiteralPath $destination -Force }
+            }
+            if ($wrapperCreated) { Remove-Item -LiteralPath $wrapper -Force }
+            if ($definitionCreated) { Remove-Item -LiteralPath $serviceFile -Force }
+            if ($configCreated) { Remove-Item -LiteralPath $Config -Force }
+            foreach ($path in $savedACLs.Keys) { Set-Acl -LiteralPath $path -AclObject $savedACLs[$path] }
+            if ($existingService -and $serviceTouched) {
+                $startType = switch ($existingService.StartMode) { 'Auto' { 'Automatic' } 'Disabled' { 'Disabled' } default { 'Manual' } }
+                Set-Service -Name $ServiceName -StartupType $startType
+                if ($wasRunning) { Start-Service -Name $ServiceName }
+            }
+            # Only remove empty directories created by this attempt; keep logs.
+            [array]::Reverse($createdDirs)
+            foreach ($dir in $createdDirs) {
+                if ((Test-Path -LiteralPath $dir) -and @(Get-ChildItem -LiteralPath $dir -Force).Count -eq 0) { Remove-Item -LiteralPath $dir -Force }
+            }
+        } catch { Write-Warning "Rollback failed: $_. Original failure: $failure" }
+    } elseif ($published) {
+        try {
+            if ($hadBinary) {
+                $restore = Join-Path $binDir ('.oci-mirror-proxy-' + [Guid]::NewGuid().ToString('N') + '.exe')
+                Copy-Item -LiteralPath $backup -Destination $restore
+                Publish-File $restore $destination
+            } else { Remove-Item -LiteralPath $destination -Force }
+        } catch { Write-Warning "Binary rollback failed: $_. Original failure: $failure" }
+    }
+    throw $failure
 } finally {
     if ($staged -and (Test-Path -LiteralPath $staged)) { Remove-Item -LiteralPath $staged -Force }
     Remove-Item -LiteralPath $tempDir -Recurse -Force
