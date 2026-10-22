@@ -69,7 +69,8 @@ try {
     Copy-Item -LiteralPath $binary -Destination $staged
     # Windows locks running executables; fail without deleting the installed binary.
     if (Test-Path -LiteralPath $destination) {
-        [IO.File]::Replace($staged, $destination, $null)
+        # PowerShell converts $null to an empty string for .NET string parameters.
+        [IO.File]::Replace($staged, $destination, [System.Management.Automation.Language.NullString]::Value)
     } else {
         [IO.File]::Move($staged, $destination)
     }
