@@ -59,7 +59,20 @@ curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.
 curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- --update --prefix /usr/local --service
 ```
 
-脚本会下载对应的 Linux `amd64` 或 `arm64` 二进制文件，并校验 SHA256。当没有匹配的二进制文件，或指定了 `--build` 时，会使用 Go 1.26.8 或更新版本（也可通过 Go 工具链自动下载）构建发布源码。使用 `--version v1.0.1` 可选择指定版本。
+脚本会下载对应的 Linux、macOS 或 FreeBSD 二进制文件，并校验 SHA256。当没有匹配的二进制文件，或指定了 `--build` 时，会使用 Go 1.26.8 或更新版本（也可通过 Go 工具链自动下载）构建发布源码。使用 `--version v1.0.1` 可选择指定版本。
+
+预编译程序支持以下平台：Linux 支持 `amd64`、`arm64`、`armv7`、`riscv64`；macOS、FreeBSD 和 Windows 支持 `amd64`、`arm64`。Windows 使用 `.zip`，其他系统使用 `.tar.gz`。
+
+Windows 用户可下载并检查 PowerShell 安装脚本后执行：
+
+```powershell
+Invoke-WebRequest https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.ps1 -OutFile install.ps1
+.\install.ps1
+# 更新 PATH 中已有的程序：
+.\install.ps1 -Update
+```
+
+Windows 安装脚本校验 SHA256，默认安装到 `$env:LOCALAPPDATA\oci-mirror-proxy\bin`，需自行添加到 PATH。使用 `-Prefix C:\Tools` 可安装到 `C:\Tools\bin`，`-Version v1.0.1` 可指定版本，`-DownloadBaseUrl` 可指定仓库地址。更新前请停止程序，避免可执行文件被锁定。PowerShell 脚本不执行源码构建、订阅同步或 Windows 服务安装；`--service` 选项适用于使用 systemd 或 OpenRC 的 Linux 系统。
 
 如需使用下载镜像，将 `DOWNLOAD_BASE_URL` 设为镜像仓库根 URL（需保持相同的 `/releases` 和 `/archive` 布局）。通过管道执行脚本时，应将变量传给 `sh`，而不只是传给 `curl`：
 

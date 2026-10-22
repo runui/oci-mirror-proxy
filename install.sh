@@ -252,11 +252,12 @@ arch=$(uname -m)
 case "$arch" in
     x86_64|amd64) arch=amd64 ;;
     aarch64|arm64) arch=arm64 ;;
+    armv7l|armv7|armhf) arch=armv7 ;;
 esac
 
 if [ "$build" = false ]; then
     case "$os/$arch" in
-        linux/amd64|linux/arm64)
+        linux/amd64|linux/arm64|linux/armv7|linux/riscv64|darwin/amd64|darwin/arm64|freebsd/amd64|freebsd/arm64)
             asset="oci-mirror-proxy_${version}_${os}_${arch}.tar.gz"
             printf 'Downloading %s...\n' "$asset"
             status=$(curl --silent --show-error --location --output "$build_dir/$asset" \
@@ -276,7 +277,10 @@ if [ "$build" = false ]; then
                         die 'sha256sum or shasum is required to verify downloads'
                     fi
                     [ "${actual%% *}" = "$expected" ] || die 'SHA256 verification failed; installation aborted'
-                    tar -xzf "$build_dir/$asset" -C "$build_dir" ./oci-mirror-proxy
+                    # GoReleaser uses a bare member name; older releases used ./.
+                    member=$(tar -tzf "$build_dir/$asset" | awk '$0 == "oci-mirror-proxy" || $0 == "./oci-mirror-proxy" { print; exit }')
+                    [ -n "$member" ] || die 'release archive does not contain oci-mirror-proxy'
+                    tar -xzf "$build_dir/$asset" -C "$build_dir" "$member"
                     ;;
                 404) build=true ;;
                 *) die "binary download failed (HTTP $status); installation aborted" ;;

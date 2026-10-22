@@ -1,0 +1,61 @@
+version: 2
+
+project_name: oci-mirror-proxy
+
+builds:
+  - main: ./cmd/oci-mirror-proxy
+    binary: oci-mirror-proxy
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - freebsd
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+      - riscv64
+    goarm:
+      - '7'
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: darwin
+        goarch: riscv64
+      - goos: freebsd
+        goarch: arm
+      - goos: freebsd
+        goarch: riscv64
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: riscv64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version={{ .Tag }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: '{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - README.zh-CN.md
+      - src: examples/config.example.yaml
+        dst: config.example.yaml
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+# CI publishes the same archives to GitHub and Gitea using their native APIs.
+release:
+  disable: true
+
+changelog:
+  disable: true

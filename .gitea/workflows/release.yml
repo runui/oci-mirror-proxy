@@ -19,34 +19,29 @@ jobs:
       - name: Check out source
         uses: https://github.com/actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Test
         run: go test -count=1 ./...
 
-      - name: Build release archives
+      - name: Validate release tag
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -eu
-          # Restrict version labels before passing them to the Go linker.
           case "$RELEASE_TAG" in
             v*[!a-zA-Z0-9._+-]*|'') echo 'Invalid release tag' >&2; exit 1 ;;
             v*) ;;
             *) echo 'Release tags must start with v' >&2; exit 1 ;;
           esac
-          mkdir -p dist
-          for arch in amd64 arm64; do
-            stage="dist/linux-$arch"
-            mkdir -p "$stage"
-            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
-              -ldflags "-s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version=$RELEASE_TAG" \
-              -o "$stage/oci-mirror-proxy" ./cmd/oci-mirror-proxy
-            cp README.md "$stage/"
-            cp examples/config.example.yaml "$stage/"
-            tar -czf "dist/oci-mirror-proxy_${RELEASE_TAG}_linux_${arch}.tar.gz" -C "$stage" .
-          done
-          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
+
+      - name: Build release archives
+        uses: https://github.com/goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --clean --skip=publish
 
       - name: Publish Gitea release
         env:
@@ -65,7 +60,7 @@ jobs:
             200) ;;
             404)
               jq -n --arg tag "$RELEASE_TAG" \
-                '{tag_name: $tag, name: $tag, body: "Linux amd64 and arm64 binaries. Verify downloads with SHA256SUMS.", draft: false, prerelease: ($tag | test("-"))}' \
+                '{tag_name: $tag, name: $tag, body: "Linux, macOS, FreeBSD, and Windows binaries. Verify downloads with SHA256SUMS.", draft: false, prerelease: ($tag | test("-"))}' \
                 > dist/release-request.json
               curl --fail-with-body --silent --show-error \
                 --header "Authorization: token $RELEASE_TOKEN" \
@@ -76,7 +71,7 @@ jobs:
             *) echo "Could not look up release (HTTP $status)" >&2; exit 1 ;;
           esac
           release_id=$(jq -er '.id | numbers' dist/release.json)
-          for asset in dist/*.tar.gz dist/SHA256SUMS; do
+          for asset in dist/*.tar.gz dist/*.zip dist/SHA256SUMS; do
             name=$(basename "$asset")
             # Replace only our named assets, so rerunning a release job is safe.
             curl --fail-with-body --silent --show-error \

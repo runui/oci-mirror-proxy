@@ -21,6 +21,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Go
@@ -43,22 +44,11 @@ jobs:
         run: go test -count=1 ./...
 
       - name: Build release archives
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          mkdir -p dist
-          for arch in amd64 arm64; do
-            stage="dist/linux-$arch"
-            mkdir -p "$stage"
-            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
-              -ldflags "-s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version=$RELEASE_TAG" \
-              -o "$stage/oci-mirror-proxy" ./cmd/oci-mirror-proxy
-            cp README.md "$stage/"
-            cp examples/config.example.yaml "$stage/"
-            tar -czf "dist/oci-mirror-proxy_${RELEASE_TAG}_linux_${arch}.tar.gz" -C "$stage" .
-          done
-          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --clean --skip=publish
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -66,13 +56,71 @@ jobs:
           name: release-assets
           path: |
             dist/*.tar.gz
+            dist/*.zip
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
 
+  verify-windows:
+    name: Verify Windows installer
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Test installation, update, and checksum rejection
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'installer-server'
+          $assets = Join-Path $root "releases/download/$env:RELEASE_TAG"
+          New-Item -ItemType Directory -Path $assets -Force | Out-Null
+          Copy-Item dist/* -Destination $assets
+          $server = Start-Process python -ArgumentList @('-m', 'http.server', '18765', '--bind', '127.0.0.1', '--directory', $root) -PassThru -NoNewWindow
+          try {
+            $url = 'http://127.0.0.1:18765'
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              try { Invoke-WebRequest "$url/" | Out-Null; $ready = $true; break } catch { Start-Sleep -Seconds 1 }
+            }
+            if (-not $ready) { throw 'Fixture server did not start.' }
+            $prefix = Join-Path $env:RUNNER_TEMP 'install with spaces'
+            ./install.ps1 -Version $env:RELEASE_TAG -Prefix $prefix -DownloadBaseUrl $url
+            $binary = Join-Path $prefix 'bin/oci-mirror-proxy.exe'
+            $actual = & $binary version
+            if ($LASTEXITCODE -ne 0 -or $actual -ne $env:RELEASE_TAG) { throw "Unexpected version: $actual" }
+            $env:PATH = (Split-Path $binary) + [IO.Path]::PathSeparator + $env:PATH
+            ./install.ps1 -Version $env:RELEASE_TAG -Update -DownloadBaseUrl $url
+            $original = (Get-FileHash $binary).Hash
+            $checksums = Join-Path $assets 'SHA256SUMS'
+            (Get-Content $checksums) -replace '^[a-fA-F0-9]{64}', ('0' * 64) | Set-Content $checksums
+            $rejected = $false
+            try {
+              ./install.ps1 -Version $env:RELEASE_TAG -Update -DownloadBaseUrl $url
+            } catch {
+              if ($_.Exception.Message -notmatch 'SHA256 verification failed') { throw }
+              $rejected = $true
+            }
+            if (-not $rejected -or (Get-FileHash $binary).Hash -ne $original) { throw 'Checksum failure replaced the installed executable.' }
+          } finally {
+            Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+          }
+
   publish:
     name: Publish GitHub release
-    needs: build
+    needs: [build, verify-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -98,5 +146,5 @@ jobs:
             gh release create "$RELEASE_TAG" --verify-tag --draft \
               --title "$RELEASE_TAG" --generate-notes --prerelease="$prerelease"
           fi
-          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS --clobber
+          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS --clobber
           gh release edit "$RELEASE_TAG" --draft=false --prerelease="$prerelease"

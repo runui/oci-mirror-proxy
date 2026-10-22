@@ -71,7 +71,7 @@ curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/insta
 curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --update --prefix /usr/local --service
 ```
 
-The script downloads the matching Linux `amd64` or `arm64` binary and verifies
+The script downloads the matching Linux, macOS, or FreeBSD binary and verifies
 its SHA256 checksum. When no matching binary is available, or `--build` is
 specified, it builds release source using Go 1.26.8 or newer (or Go toolchain
 auto-download). Use `--version v1.0.1` to select a release.
@@ -87,6 +87,34 @@ The default prefix is `/usr/local`, which requires write permission. Existing
 configuration is preserved; without `--service`, no configuration is initialized
 and no service is installed or restarted. Docker is never modified or restarted.
 Restart a running proxy manually after updating without `--service`.
+
+### Platforms and Windows installation
+
+Prebuilt binaries are available for the following platforms:
+
+| System | Architectures | Archive |
+| --- | --- | --- |
+| Linux | amd64, arm64, armv7, riscv64 | `.tar.gz` |
+| macOS | amd64, arm64 | `.tar.gz` |
+| FreeBSD | amd64, arm64 | `.tar.gz` |
+| Windows | amd64, arm64 | `.zip` |
+
+On Windows, download and inspect the PowerShell installer, then run it:
+
+```powershell
+Invoke-WebRequest https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.ps1 -OutFile install.ps1
+.\install.ps1 -DownloadBaseUrl https://github.com/runui/oci-mirror-proxy
+# Update an executable already in PATH:
+.\install.ps1 -DownloadBaseUrl https://github.com/runui/oci-mirror-proxy -Update
+```
+
+The Windows installer verifies SHA256 and installs into
+`$env:LOCALAPPDATA\oci-mirror-proxy\bin` by default. Use `-Prefix C:\Tools`
+to install into `C:\Tools\bin`, or `-Version v1.0.1` to select a release.
+Add the installation directory to PATH yourself. Stop the proxy before updating
+on Windows; running executables may be locked. The PowerShell installer does not
+build from source, synchronize subscriptions, or install a Windows service.
+The `--service` option is available on Linux with systemd or OpenRC.
 
 ## Docker deployment
 
