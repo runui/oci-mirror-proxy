@@ -453,16 +453,20 @@ func TestWindowsInstallerService(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "fixture.go")
 	if err := os.WriteFile(source, []byte(`package main
-import ("os"; "strings")
+import ("os"; "strings"; "fmt")
 func main() {
  args := os.Args[1:]
  if len(args)==0 { os.Exit(1) }
  switch args[0] {
  case "init":
-  for i,a := range args { if a=="--config" { if err:=os.WriteFile(args[i+1],[]byte("fixture configuration\n"),0600); err!=nil { panic(err) }; return } }
+  for i,a := range args { if a=="--config" { if err:=os.WriteFile(args[i+1],[]byte("registries:\n  docker.io:\n    adaptive:\n      enabled: false\n"),0600); err!=nil { panic(err) }; return } }
   os.Exit(1)
  case "status":
   if strings.Contains(os.Getenv("TEST_SCENARIO"),"failed") { os.Exit(1) }
+ case "remote":
+ case "server":
+  fmt.Println("{\"schema_version\":1}")
+ case "dockerd":
  default: os.Exit(1)
  }
 }

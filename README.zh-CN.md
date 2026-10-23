@@ -88,7 +88,7 @@ Invoke-WebRequest https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/i
 curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/bin/oci-mirror-proxy sh -s -- --prefix "$HOME/.local"
 ```
 
-默认安装目录为 `/usr/local`，需要写入权限。现有配置会保留；不使用 `--service` 时，不会初始化配置、安装或重启服务。脚本不会修改或重启 Docker。不带 `--service` 更新后，需要手动重启正在运行的代理。
+默认安装目录为 `/usr/local`，需要写入权限。现有配置会保留；不使用 `--service` 时，不会安装或重启服务。不带 `--service` 更新后，需要手动重启正在运行的代理。
 
 ## Docker 部署
 

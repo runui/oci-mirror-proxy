@@ -5,7 +5,7 @@ usage() {
     cat <<'EOF'
 Install or update oci-mirror-proxy from https://git.zmide.com/bin/oci-mirror-proxy.
 
-Usage: ./install.sh [--prefix DIR] [--version TAG] [--build] [--update] [--service]
+Usage: ./install.sh [--prefix DIR] [--version TAG] [--build] [--update] [--service] [--skip-docker]
                     [-- REMOTE_UPDATE_ARGS...]
 
 Options:
@@ -14,6 +14,9 @@ Options:
   --build        Compile release source instead of downloading a binary.
   --update       Replace the binary found in PATH, unless --prefix is supplied.
   --service      Install and start a systemd/OpenRC/launchd service (requires root).
+  --skip-docker  Do not configure Docker. Binary-only installs always skip Docker.
+                 Service installs apply local Docker settings without restarting
+                 Docker; updates only maintain integration that is still managed.
   --             Pass remaining arguments to remote update.
   -h, --help     Show this help.
 
@@ -120,6 +123,7 @@ version=${VERSION:-latest}
 build=false
 update=false
 service=false
+skip_docker=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --prefix|--version)
@@ -133,6 +137,7 @@ while [ "$#" -gt 0 ]; do
         --build) build=true; shift ;;
         --update) update=true; shift ;;
         --service) service=true; shift ;;
+        --skip-docker) skip_docker=true; shift ;;
         --) shift; break ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
@@ -218,6 +223,43 @@ if [ "$service" = true ]; then
     fi
 fi
 
+# Docker Desktop belongs to the invoking user, not the root service account.
+# Resolve that identity before launchd normalizes HOME for the daemon commands.
+docker_user=
+docker_home=
+docker_identity_error=
+docker_endpoint=
+if [ "$service" = true ] && [ "$os" = linux ] && [ "$skip_docker" = false ] && [ -n "${SUDO_USER:-}" ]; then
+    # sudo normally changes HOME, hiding the caller's active Docker context.
+    # Resolve it as the caller instead of silently enrolling a different engine.
+    if [ "${SUDO_UID:-0}" != 0 ] &&
+        [ "$(id -u "$SUDO_USER" 2>/dev/null)" = "${SUDO_UID:-}" ] &&
+        [ "$(id -g "$SUDO_USER" 2>/dev/null)" = "${SUDO_GID:-}" ]; then
+        if [ -n "${DOCKER_HOST:-}" ] && [ -z "${DOCKER_CONTEXT:-}" ]; then
+            docker_endpoint=$DOCKER_HOST
+        else
+            docker_endpoint=$(sudo -H -u "$SUDO_USER" -- docker context inspect --format '{{.Endpoints.docker.Host}}') ||
+                docker_identity_error='cannot inspect the invoking user Docker context'
+        fi
+        case "$docker_endpoint" in
+            unix:///run/user/*) docker_identity_error='automatic system service enrollment does not support rootless Docker; configure it as the Docker user' ;;
+        esac
+    else
+        docker_identity_error='cannot validate the invoking Docker user'
+    fi
+fi
+if [ "$service" = true ] && [ "$os" = darwin ] && [ "$skip_docker" = false ]; then
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_UID:-0}" != 0 ] &&
+        [ "$(id -u "$SUDO_USER" 2>/dev/null)" = "${SUDO_UID:-}" ] &&
+        [ "$(id -g "$SUDO_USER" 2>/dev/null)" = "${SUDO_GID:-}" ] && command -v sudo >/dev/null 2>&1; then
+        docker_user=$SUDO_USER
+        docker_home=$(sudo -H -u "$docker_user" -- sh -c 'printf "%s" "$HOME"') || docker_home=
+        case "$docker_home" in /*) ;; *) docker_identity_error='cannot resolve the Docker Desktop user home' ;; esac
+    else
+        docker_identity_error='cannot identify the invoking Docker Desktop user; rerun with sudo from that user or use --skip-docker'
+    fi
+fi
+
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/oci-mirror-proxy-install.XXXXXXXX")
 staged_binary=
 rollback=false
@@ -246,6 +288,7 @@ cleanup() {
     fi
     rm -rf "$build_dir"
     if [ -n "$staged_binary" ]; then rm -f "$staged_binary"; fi
+    if [ -n "${handoff_dir:-}" ]; then rm -rf "$handoff_dir"; fi
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
@@ -486,6 +529,24 @@ if [ -n "$manager" ]; then
             die 'launchd service did not become ready; inspect /var/log/oci-mirror-proxy/stderr.log'
         fi
     fi
+    # Process-manager state is not proof the admin API is ready. Do not point
+    # Docker at an unready proxy, including on systemd and OpenRC installations.
+    if [ "$manager" != launchd ]; then
+        ready=false
+        attempts=0
+        while [ "$attempts" -lt 15 ]; do
+            if "$destination" status --config "$config" > "$build_dir/status" 2>&1; then
+                ready=true
+                break
+            fi
+            attempts=$((attempts + 1))
+            sleep 1
+        done
+        if [ "$ready" != true ]; then
+            cat "$build_dir/status" >&2
+            die 'proxy service did not become ready; inspect its service logs'
+        fi
+    fi
     printf 'Service enabled and started (%s). Config: %s\n' "$manager" "$config"
     printf 'Admin commands: sudo oci-mirror-proxy status --config %s\n' "$config"
     rollback=false
@@ -502,4 +563,45 @@ if sync_output=$(sync_remote "$@" 2>&1); then
 else
     printf 'Warning: remote subscription sync failed; installation succeeded.\n%s\n' "$sync_output" >&2
     printf 'If permission is denied, inspect the config directory and its .lock ownership as the intended user. Do not delete active lock files or make private configuration world-writable.\n' >&2
+fi
+
+# Docker enrollment is deliberately outside service rollback: an integration
+# conflict must not undo an otherwise healthy proxy installation. Existing CLI
+# state is the authority on updates, so revert is never silently undone.
+if [ -n "$manager" ] && [ "$skip_docker" = false ]; then
+    printf '\nConfiguring Docker...\n'
+    if [ -n "$docker_identity_error" ]; then
+        printf 'Proxy installation succeeded; Docker integration failed: %s\n' "$docker_identity_error" >&2
+        exit 1
+    fi
+    if [ -n "$docker_user" ]; then
+        handoff_dir=$(mktemp -d "${TMPDIR:-/tmp}/oci-mirror-proxy-info.XXXXXXXX")
+        server_info="$handoff_dir/server-info.json"
+        "$destination" server info --config "$config" --json > "$server_info" || die 'proxy installed, but could not query server information'
+        # Keep the directory root-owned so the reader cannot substitute files.
+        # Only the verified user can read the JSON; traversal alone reveals none.
+        chown "$docker_user" "$server_info"
+        chmod 711 "$handoff_dir"
+        chmod 600 "$server_info"
+    fi
+    # Keep the outer positional parameters intact: they belong to remote update.
+    apply_docker() {
+        if [ "$update" = true ]; then set -- --if-managed; else set --; fi
+        if [ -n "$docker_user" ]; then
+            sudo -H -u "$docker_user" -- env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_RUNTIME_DIR HOME="$docker_home" \
+                "$destination" dockerd apply --server-info "$server_info" --verify "$@"
+        else
+            if [ -n "$docker_endpoint" ]; then
+                env -u DOCKER_CONTEXT DOCKER_HOST="$docker_endpoint" "$destination" dockerd apply --config "$config" --verify "$@"
+            else
+                "$destination" dockerd apply --config "$config" --verify "$@"
+            fi
+        fi
+    }
+    if ! apply_docker; then
+        printf 'Proxy installation succeeded; Docker integration failed. Docker was not restarted. Fix the reported issue, then run as the Docker user (with sudo for system Docker):\n' >&2
+        printf '  sudo oci-mirror-proxy server info --config %s --json > server-info.json\n' "$config" >&2
+        printf '  oci-mirror-proxy dockerd apply --server-info server-info.json --verify\n' >&2
+        exit 1
+    fi
 fi

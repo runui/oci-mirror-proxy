@@ -8,8 +8,8 @@ Requests UAC approval when needed to install and start the automatic service.
 The default installation uses WinSW v2.12.0 (.NET Framework 4.x required), starts
 the service automatically at boot and configures failure recovery. Downloads are
 verified with SHA256. Existing configuration is preserved; failed service updates
-restore the previous binary. The installer does not edit or restart Docker and
-does not synchronize subscriptions.
+restore the previous binary. Service installs synchronize subscriptions and
+configure the current user's local Docker without restarting it.
 
 The binary directory is added to system PATH for service installs and current-user
 PATH with NoService. Existing entries are preserved and duplicate additions are
@@ -58,6 +58,9 @@ Service builds use temporary caches rather than modifying the caller's caches.
 Fail immediately when a service install lacks administrator privileges instead
 of requesting UAC approval. Useful for unattended jobs. Canceling a UAC prompt
 aborts installation; NoService never prompts, regardless of this setting.
+.PARAMETER SkipDocker
+Do not configure Docker. NoService always skips Docker. Service updates only
+maintain integration that is still managed, so a previous revert is respected.
 .EXAMPLE
 .\install.ps1
 Install the latest release as an automatic Windows service; approve UAC if asked.
@@ -86,7 +89,12 @@ param(
     [switch]$NoService,
     [string]$WinSWDownloadBaseUrl = 'https://github.com/winsw/winsw',
     [switch]$Build,
-    [switch]$NoElevate
+    [switch]$NoElevate,
+    [switch]$SkipDocker,
+    [Parameter(DontShow = $true)]
+    [switch]$ServiceStageOnly,
+    [Parameter(DontShow = $true)]
+    [string]$InfoID = ([Guid]::NewGuid().ToString('N'))
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,6 +104,7 @@ $repo = $DownloadBaseUrl.TrimEnd('/')
 if ($repo -notmatch '^https?://') { throw 'DownloadBaseUrl must be an HTTP or HTTPS repository root URL.' }
 if ($Version -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._+-]*$') { throw 'Invalid release tag.' }
 if ($ServiceName -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$') { throw 'Invalid service name.' }
+if ($InfoID -notmatch '^[a-f0-9]{32}$') { throw 'Invalid information handoff ID.' }
 
 function Resolve-InstallPath([string]$Path) {
     # Require a local, fully qualified path, not drive-relative or UNC paths.
@@ -325,6 +334,19 @@ function Protect-ServicePath([string]$Path, [switch]$Directory, [switch]$ReadUse
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
+function Connect-UserDocker {
+    if ($SkipDocker -or $NoService) { return }
+    $targetFile = Join-Path $binDir "server-info-$InfoID.json"
+    $arguments = @('dockerd', 'apply', '--server-info', $targetFile, '--verify')
+    if ($Update) { $arguments += '--if-managed' }
+    try {
+        & $destination @arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Proxy installation succeeded, but Docker integration failed. Docker was not restarted. Export server info --json as Administrator, then retry dockerd apply --server-info FILE --verify as the Docker user."
+        }
+    } finally { Remove-Item -LiteralPath $targetFile -Force -ErrorAction SilentlyContinue }
+}
+
 if ($NoService -and -not $PSBoundParameters.ContainsKey('Prefix')) {
     $Prefix = Join-Path $env:LOCALAPPDATA 'oci-mirror-proxy'
 }
@@ -358,6 +380,10 @@ if (-not $NoService) {
         foreach ($key in @('Prefix', 'Config', 'Version', 'DownloadBaseUrl', 'WinSWDownloadBaseUrl', 'ServiceName')) {
             $elevationParameters[$key] = Get-Variable -Name $key -ValueOnly
         }
+        # UAC may select another administrator. Only the original process may
+        # enroll the invoking user's Desktop; the elevated child owns the service.
+        $elevationParameters['ServiceStageOnly'] = $true
+        $elevationParameters['InfoID'] = $InfoID
         $goPath = ''
         if ($Build) {
             $go = Get-Command go -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -366,6 +392,7 @@ if (-not $NoService) {
         }
         $code = Invoke-ElevatedInstaller $PSCommandPath $elevationParameters $goPath
         if ($code -ne 0) { Write-Host "Elevated installation failed (exit $code)." }
+        if ($code -eq 0) { Connect-UserDocker }
         exit $code
     }
     # Never replace ACLs on shared system directories or a drive root.
@@ -548,6 +575,13 @@ try {
             $configCreated = $true
             & $staged init --config $Config --admin-socket $adminPipe
             if ($LASTEXITCODE -ne 0) { throw 'Configuration initialization failed.' }
+            # Change only the fresh Docker Hub adaptive setting. Existing user
+            # configuration, other registries and race settings remain untouched.
+            $fresh = [IO.File]::ReadAllText($Config)
+            $pattern = '(?ms)(^  docker\.io:\r?\n(?:(?!^  \S).)*?^    adaptive:\r?\n(?:(?!^    \S).)*?^      enabled:) false'
+            $updated = [regex]::Replace($fresh, $pattern, '${1} true')
+            if ($updated -ceq $fresh) { throw 'Fresh Docker Hub adaptive setting was not found.' }
+            [IO.File]::WriteAllText($Config, $updated, (New-Object Text.UTF8Encoding($false)))
         }
         if ($existingService) {
             $wasRunning = (Get-Service -Name $ServiceName).Status -ne 'Stopped'
@@ -590,6 +624,25 @@ try {
             Start-Sleep -Milliseconds 500
         }
         if (-not $ready) { throw "Service did not become ready. Check $logDir" }
+        & $destination remote update --config $Config --admin-socket $adminPipe
+        if ($LASTEXITCODE -ne 0) { Write-Warning 'Remote subscription synchronization failed; retry remote update as Administrator.' }
+        # Publish only non-secret renderer inputs in the administrator-owned bin
+        # directory. Never write elevated output into the caller's temp directory
+        # or expose the private service configuration to the Desktop user.
+        if (-not $SkipDocker) {
+            $target = & $destination server info --config $Config --admin-socket $adminPipe --json
+            if ($LASTEXITCODE -ne 0) { throw 'Could not query server information.' }
+            $targetFile = Join-Path $binDir "server-info-$InfoID.json"
+            Assert-NoReparsePoint $targetFile
+            [IO.File]::WriteAllText($targetFile, ($target -join "`n"), (New-Object Text.UTF8Encoding($false)))
+            Protect-ServicePath $targetFile -ReadUsers
+            # Readers may delete this one-use handoff, but cannot change it or
+            # create a replacement in the administrator-owned parent directory.
+            $acl = Get-Acl -LiteralPath $targetFile
+            $users = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')
+            $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($users, 'Delete', 'Allow')))
+            Set-Acl -LiteralPath $targetFile -AclObject $acl
+        }
         Add-BinaryPath
         Write-Host "Installed $destination ($Version). Service $ServiceName is running and enabled at boot."
         Write-Host "Configuration: $Config"
@@ -602,6 +655,7 @@ try {
     }
 } catch {
     $failure = $_
+    if ($targetFile -and (Test-Path -LiteralPath $targetFile)) { Remove-Item -LiteralPath $targetFile -Force -ErrorAction SilentlyContinue }
     try { Restore-BinaryPath } catch { Write-Warning "PATH rollback failed: $_" }
     if (-not $NoService) {
         try {
@@ -647,3 +701,7 @@ try {
     if ($staged -and (Test-Path -LiteralPath $staged)) { Remove-Item -LiteralPath $staged -Force }
     Remove-Item -LiteralPath $tempDir -Recurse -Force
 }
+
+# Enrollment is outside the service transaction. Docker conflicts must not roll
+# back a healthy proxy, and Desktop is never restarted without explicit consent.
+if (-not $ServiceStageOnly) { Connect-UserDocker }

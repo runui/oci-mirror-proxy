@@ -35,6 +35,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		err = cmdServe(ctx, args[1:], stderr)
 	case "status":
 		err = cmdStatus(args[1:], stdout, stderr)
+	case "server":
+		err = cmdServer(args[1:], stdout, stderr)
 	case "reload":
 		err = cmdReload(args[1:], stderr)
 	case "upstream":
@@ -79,6 +81,7 @@ Setup:
   init                 write a default configuration file
   dockerd plan         show how dockerd will be configured (writes nothing)
   dockerd apply        configure dockerd to use the proxy (needs root for system paths)
+  server info          display client, server and configuration information (--json)
   dockerd revert       undo the last apply
   doctor               check that the proxy and dockerd are wired correctly
 

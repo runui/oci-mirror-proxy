@@ -44,7 +44,7 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	svc, err := app.New(ctx, app.Options{ConfigPath: path, Logger: logger, LogLevel: configLevel})
+	svc, err := app.New(ctx, app.Options{ConfigPath: path, Logger: logger, LogLevel: configLevel, Version: version})
 	if err != nil {
 		return err
 	}

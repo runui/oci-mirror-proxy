@@ -40,8 +40,15 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 		invalidSudo     bool
 		existingService bool
 		customService   bool
+		skipDocker      bool
+		dockerFail      bool
 	}{
 		{name: "first install"},
+		{name: "service applies Docker", service: true},
+		{name: "sudo macOS service applies as user", service: true, darwin: true, sudo: true},
+		{name: "service skips Docker", service: true, skipDocker: true},
+		{name: "Docker failure preserves service", service: true, dockerFail: true},
+		{name: "service update only maintains managed Docker", service: true, update: true},
 		{name: "macOS first install", darwin: true},
 		{name: "macOS service", darwin: true, service: true},
 		{name: "macOS service failure", darwin: true, service: true, serviceFail: true},
@@ -140,6 +147,7 @@ case "$1" in
         ;;
 esac
 `, 0o755)
+			write(filepath.Join(tools, "chown"), "#!/bin/sh\nexit 0\n", 0o755)
 			write(filepath.Join(tools, "plutil"), "#!/bin/sh\nexit 0\n", 0o755)
 			// Ownership arguments are validated separately on real macOS; the fixture
 			// must run unprivileged on Linux too, where the wheel group may not exist.
@@ -185,6 +193,16 @@ case "$1" in
         echo 'mock synchronized'
         ;;
     status) exit 0 ;;
+    server) echo '{"schema_version":1,"config":{"proxy_url":"http://127.0.0.1:24817","registries":[{"alias":"docker.io","origin":"https://registry-1.docker.io"}]}}' ;;
+    dockerd)
+        case "$2" in
+            apply)
+                [ "$TEST_DOCKER_FAIL" != true ] || exit 1
+                echo 'Docker integration: active'
+                ;;
+            *) exit 1 ;;
+        esac
+        ;;
     *) exit 1 ;;
 esac
 `, 0o755)
@@ -229,6 +247,9 @@ esac
 			if tc.service {
 				args = append(args, "--service")
 			}
+			if tc.skipDocker || (tc.darwin && tc.service && !tc.sudo) {
+				args = append(args, "--skip-docker")
+			}
 			if tc.update {
 				args = append(args, "--update")
 			}
@@ -260,6 +281,7 @@ esac
 				"TEST_REMOTE_ARGS="+remoteArgsPath,
 				"TEST_INIT_FAIL="+strconv.FormatBool(tc.initFail), "TEST_SYNC_FAIL="+strconv.FormatBool(tc.syncFail),
 				"TEST_SERVICE_FAIL="+strconv.FormatBool(tc.serviceFail))
+			cmd.Env = append(cmd.Env, "TEST_DOCKER_FAIL="+strconv.FormatBool(tc.dockerFail))
 			if tc.sudo {
 				sudoUID := "501"
 				if tc.invalidSudo {
@@ -306,6 +328,15 @@ esac
 				}
 				return
 			}
+			if tc.dockerFail {
+				if runErr == nil || !bytes.Contains(out, []byte("Proxy installation succeeded; Docker integration failed")) {
+					t.Fatalf("Docker failure not reported: %v\n%s", runErr, out)
+				}
+				if _, err := os.Stat(filepath.Join(prefix, "bin", "oci-mirror-proxy")); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
 			if runErr != nil {
 				t.Fatalf("installer failed: %v\n%s", runErr, out)
 			}
@@ -314,6 +345,21 @@ esac
 					t.Fatalf("unverified account touched configuration: %s\n%s", out, log)
 				}
 				return
+			}
+			applied := bytes.Contains(log, []byte("dockerd apply"))
+			if applied != (tc.service && !tc.skipDocker && (!tc.darwin || tc.sudo)) {
+				t.Fatalf("unexpected Docker enrollment: %s", log)
+			}
+			if applied {
+				if bytes.Contains(log, []byte("--restart")) || bytes.Contains(log, []byte("--force")) || bytes.Contains(log, []byte("--no-reload")) {
+					t.Fatalf("unsafe Docker flags: %s", log)
+				}
+				if tc.update && !bytes.Contains(log, []byte("--if-managed")) {
+					t.Fatalf("update reenrolls Docker: %s", log)
+				}
+				if strings.Index(string(log), "status --config") > strings.Index(string(log), "dockerd apply") {
+					t.Fatalf("applied before ready: %s", log)
+				}
 			}
 			if tc.darwin && tc.service {
 				definition, err := os.ReadFile(servicePath)
@@ -327,7 +373,7 @@ esac
 					}
 				}
 			}
-			if tc.sudo && bytes.Count(log, []byte("sudo-user\n")) < 4 {
+			if tc.sudo && !tc.service && bytes.Count(log, []byte("sudo-user\n")) < 4 {
 				t.Fatalf("configuration operations did not drop privileges: %s", log)
 			}
 			installed, err := os.ReadFile(filepath.Join(prefix, "bin", "oci-mirror-proxy"))

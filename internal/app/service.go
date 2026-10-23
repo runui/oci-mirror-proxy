@@ -27,6 +27,7 @@ const resumeAttempts = 3
 
 // Options configures a Service.
 type Options struct {
+	Version    string
 	ConfigPath string
 	Logger     *slog.Logger
 	// LogLevel follows configuration on reload, unless the CLI overrides it.
@@ -41,6 +42,7 @@ type Options struct {
 // requests never take that lock: they briefly acquire a runtime generation,
 // then serve the entire response without holding configuration locks.
 type Service struct {
+	build    admin.BuildInfo
 	path     string
 	logger   *slog.Logger
 	logLevel *slog.LevelVar
@@ -71,6 +73,7 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 		}
 	}
 	s := &Service{
+		build:    admin.CurrentBuild(opts.Version),
 		path:     opts.ConfigPath,
 		logger:   logger,
 		logLevel: opts.LogLevel,
@@ -184,6 +187,18 @@ func (s *Service) mutate(fn func(*config.Bundle) error) error {
 	next := b.Effective
 	next.Listen = s.applied.Listen
 	return s.apply(ctx, next, b.Persist)
+}
+
+// Info describes the applied generation under the reload lock. Reading disk
+// would report edits that the running service has not accepted yet.
+func (s *Service) Info() admin.ServerInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg := admin.ConfigInfo{Listen: s.applied.Listen, ProxyURL: s.applied.ProxyURL(), Registries: []admin.RegistryInfo{}}
+	for _, alias := range slices.Sorted(maps.Keys(s.applied.Registries)) {
+		cfg.Registries = append(cfg.Registries, admin.RegistryInfo{Alias: alias, Origin: s.applied.Registries[alias].Origin})
+	}
+	return admin.ServerInfo{SchemaVersion: 1, Server: s.build, APIVersion: "v1", Config: cfg}
 }
 
 // Status implements admin.Controller.

@@ -15,6 +15,16 @@ func NewHTTPServer(ctl Controller) *http.Server {
 	s := &server{ctl: ctl}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", s.status)
+	mux.HandleFunc("GET /v1/info", func(w http.ResponseWriter, r *http.Request) {
+		// Unsupported information must not be synthesized from status or the
+		// caller's version. Older controller implementations remain usable.
+		provider, ok := ctl.(interface{ Info() ServerInfo })
+		if !ok {
+			writeJSON(w, http.StatusNotImplemented, errorResponse{Error: "server information is not supported"})
+			return
+		}
+		writeJSON(w, http.StatusOK, provider.Info())
+	})
 	mux.HandleFunc("GET /v1/registries/{alias}/upstreams", s.listUpstreams)
 	mux.HandleFunc("POST /v1/registries/{alias}/upstreams", s.addUpstream)
 	mux.HandleFunc("PATCH /v1/registries/{alias}/upstreams/{id}", s.patchUpstream)

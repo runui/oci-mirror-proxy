@@ -84,8 +84,7 @@ curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/insta
 ```
 
 The default prefix is `/usr/local`, which requires write permission. Existing
-configuration is preserved; without `--service`, no configuration is initialized
-and no service is installed or restarted. Docker is never modified or restarted.
+configuration is preserved; without `--service`, no service is installed or restarted.
 Restart a running proxy manually after updating without `--service`.
 
 ### Platforms and Windows installation
