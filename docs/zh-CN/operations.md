@@ -44,16 +44,17 @@
 
 ### Windows 与 Docker Desktop
 
-Windows 安装脚本会启动代理服务并配置开机自启。在管理员 PowerShell 中使用：
+Windows 安装脚本会启动代理服务并配置开机自启。状态查询及本地管理 API 无需提权；
+编辑受保护的服务文件、启动和停止 Windows 服务需要管理员权限：
 
 ```powershell
 $proxy = "$env:ProgramFiles\oci-mirror-proxy\bin\oci-mirror-proxy.exe"
 $config = "$env:ProgramData\oci-mirror-proxy\config.yaml"
 Get-Service oci-mirror-proxy
-& $proxy status --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
-& $proxy remote update --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --region cn
+& $proxy status --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
+& $proxy remote update --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --region cn
 # 编辑 config.yaml 后：
-& $proxy reload --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
+& $proxy reload --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
 # 修改 listen 后：
 Restart-Service oci-mirror-proxy
 # 停止 / 启动代理：
@@ -63,9 +64,19 @@ Start-Service oci-mirror-proxy
 
 服务配置位于 `%ProgramData%\oci-mirror-proxy\config.yaml`，日志位于
 `%ProgramData%\oci-mirror-proxy\logs`。使用自定义服务名时，请替换命令中的服务名和管道名。
-卸载服务时先停止服务，再运行
-`& "$env:ProgramFiles\oci-mirror-proxy\service\oci-mirror-proxy.exe" uninstall`；
-配置和日志会保留。
+卸载时请以 Docker 用户运行 `.\install.ps1 uninstall`，按需批准 UAC。
+脚本先从当前 Docker 配置移除本代理，再停止服务；清理失败会保留安装。
+`-SkipDocker` 可明确跳过清理。Docker 不会自动重启，代理配置和日志会保留。
+不要提前停代理：`dockerd revert` 需要从运行中的服务查询目标地址。
+
+本地用户可通过管理 API 查询和修改系统服务；私有前台实例仍仅限所属账户访问，
+远程管道连接被拒绝。更新程序并重启服务一次后，新的管道 ACL 才会生效。
+
+每次 Windows 安装都会打印持久化日志路径。用户阶段日志位于
+`%LOCALAPPDATA%\oci-mirror-proxy-installer\<run-id>\install.log`，提权阶段日志位于
+`%ProgramData%\oci-mirror-proxy-installer\<run-id>\install.log`，后者需管理员权限读取。
+即使提权窗口关闭，原窗口仍会输出退出码和日志路径。下载进度不再刷屏；
+原生命令警告以普通文本显示，不单独表示安装失败。
 
 普通用户也可运行系统安装的程序，使用上述 `$proxy` 完整路径，或打开新终端直接运行 `oci-mirror-proxy`。
 安装器会自动将程序加入 PATH。

@@ -39,7 +39,8 @@ try {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Check must run as a standard user.' }
     $env:PATH = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
-    if ((Get-Command oci-mirror-proxy.exe -CommandType Application).Source -ine $data.Binary) { throw 'Installed binary is not discoverable through PATH.' }
+    $installedCommand = Get-Command oci-mirror-proxy.exe -CommandType Application | Select-Object -First 1
+    if ($installedCommand.Source -ine $data.Binary) { throw 'Installed binary is not discoverable through PATH.' }
     & $data.Binary version
     if ($LASTEXITCODE -ne 0) { throw 'Standard user cannot execute installed binary.' }
     & $data.Binary --help
@@ -55,11 +56,14 @@ try {
     # The proxy data plane remains available without administrative privileges.
     $response = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:24817/v2/'
     if ($response.StatusCode -ne 200) { throw 'Service proxy is unavailable to users.' }
-    $ErrorActionPreference = 'Continue'
-    & $data.Binary status --admin-socket $data.AdminPipe *> $null
-    $exitCode=$LASTEXITCODE
-    $ErrorActionPreference = 'Stop'
-    if ($exitCode -eq 0) { throw 'Standard user can administer the system service.' }
+    # SYSTEM services expose their local management API to local users, while
+    # their executable/configuration files remain protected above.
+    & $data.Binary status --admin-socket $data.AdminPipe
+    if ($LASTEXITCODE -ne 0) { throw 'Standard user cannot query the system service.' }
+    & $data.Binary server info --admin-socket $data.AdminPipe --json
+    if ($LASTEXITCODE -ne 0) { throw 'Standard user cannot read system server information.' }
+    & $data.Binary reload --admin-socket $data.AdminPipe
+    if ($LASTEXITCODE -ne 0) { throw 'Standard user cannot manage the system service.' }
     # Isolate per-user configuration while exercising the normal default lookup.
     $env:APPDATA = Join-Path $data.Work 'Roaming'
     $env:LOCALAPPDATA = Join-Path $data.Work 'Local'
@@ -87,6 +91,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $data.Work 'passed'), 'standard-user checks passed')
     exit 0
 } catch {
+    Write-Host ($_ | Format-List * -Force | Out-String)
     [Console]::Error.WriteLine($_.ToString())
     exit 1
 } finally {
@@ -96,9 +101,25 @@ try {
     $command = $command.Replace('__PAYLOAD__', $payload)
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $credential = New-Object Management.Automation.PSCredential("$env:COMPUTERNAME\$name", $password)
-    $process = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoLogo','-NoProfile','-EncodedCommand',$encoded) -Credential $credential -LoadUserProfile -WorkingDirectory $WorkDirectory -Wait -PassThru
+    $stdout = Join-Path $WorkDirectory 'check-stdout.log'
+    $stderr = Join-Path $WorkDirectory 'check-stderr.log'
+    # Do not pass pwsh's module search path into Windows PowerShell 5.1; loading
+    # Security/Utility from the wrong edition can fail before the permission check.
+    $modulePath = $env:PSModulePath
     try {
-        if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $WorkDirectory 'passed'))) { throw 'Standard-user permission check failed.' }
+        $env:PSModulePath = "$env:ProgramFiles\WindowsPowerShell\Modules;$env:SystemRoot\System32\WindowsPowerShell\v1.0\Modules"
+        $process = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoLogo','-NoProfile','-EncodedCommand',$encoded) -Credential $credential -LoadUserProfile -WorkingDirectory $WorkDirectory -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+    } finally { $env:PSModulePath = $modulePath }
+    try {
+        if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $WorkDirectory 'passed'))) {
+            foreach ($log in @($stdout, $stderr, (Join-Path $WorkDirectory 'stdout.log'), (Join-Path $WorkDirectory 'stderr.log'))) {
+                if (Test-Path -LiteralPath $log) {
+                    Write-Host "Standard-user diagnostic: $log"
+                    Get-Content -LiteralPath $log -Tail 100 | Out-Host
+                }
+            }
+            throw "Standard-user permission check failed (exit $($process.ExitCode))."
+        }
     } finally { $process.Dispose() }
 } finally {
     try {

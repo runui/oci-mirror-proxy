@@ -16,12 +16,12 @@ failures warn with manual recovery commands; they do not undo installation.
 The binary directory is added to system PATH for service installs and current-user
 PATH with NoService. Existing entries are preserved and duplicate additions are
 avoided. Open a new terminal after installation. Standard users can execute the
-system-installed binary and use their own configuration, but service management
-and service configuration require administrator privileges.
+system-installed binary and local management API. Windows service control and
+direct edits to protected service configuration files require administrator privileges.
 .PARAMETER Command
 install (default), update or uninstall. -Update remains supported. Uninstall
-preserves configuration, caches and logs. Revert managed Docker integration as
-the Docker user first, or explicitly use -SkipDocker to leave it unchanged.
+preserves configuration, caches and logs. Removes this proxy from the invoking
+Docker user's settings before stopping the service. Use -SkipDocker to opt out.
 .PARAMETER Prefix
 Dedicated application directory. Defaults to %ProgramFiles%\oci-mirror-proxy
 for service installs, or %LOCALAPPDATA%\oci-mirror-proxy with NoService. The
@@ -121,6 +121,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 # Normalize the legacy switch once; all update behavior uses the same path.
 if ($Update -and $PSBoundParameters.ContainsKey('Command') -and $Command -ne 'update') { throw '-Update conflicts with the selected command.' }
 if ($Update) { $Command = 'update' }
@@ -168,10 +169,14 @@ function Invoke-ElevatedInstaller([string]$ScriptPath, [hashtable]$Parameters, [
         $values[$key] = $value
     }
     $values['NoElevate'] = $true
+    if (-not $values['InfoID']) { $values['InfoID'] = [Guid]::NewGuid().ToString('N') }
     $data = @{ Script = $ScriptPath; Parameters = $values; GoPath = $GoPath; BuildDirectory = $(if ($Parameters['Build']) { (Get-Location).ProviderPath } else { '' }) } | ConvertTo-Json -Depth 5 -Compress
     $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($data))
     $bootstrap = @'
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+__LOG_FUNCTIONS__
+$transcribing = $false
 try {
     $data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
     $parameters = @{}
@@ -184,6 +189,8 @@ try {
     [IO.Directory]::CreateDirectory($temp) > $null
     $env:TEMP = $temp
     $env:TMP = $temp
+    Start-InstallerLog $data.Parameters.InfoID -System
+    $transcribing = $true
     if ($data.GoPath) {
         if (-not (Test-Path -LiteralPath $data.GoPath -PathType Leaf)) { throw 'The selected Go executable is unavailable to the administrator account.' }
         $env:PATH = (Split-Path -Parent $data.GoPath) + [IO.Path]::PathSeparator + $env:PATH
@@ -192,10 +199,14 @@ try {
     & $data.Script @parameters
     exit 0
 } catch {
+    Write-Host ($_ | Format-List * -Force | Out-String)
     [Console]::Error.WriteLine($_.ToString())
     exit 1
+} finally {
+    if ($transcribing) { Stop-Transcript | Out-Null }
 }
 '@
+    $bootstrap = $bootstrap.Replace('__LOG_FUNCTIONS__', ('function Start-InstallerLog {' + ${function:Start-InstallerLog}.ToString() + '}'))
     $bootstrap = $bootstrap.Replace('__PAYLOAD__', $payload)
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
     if ($encoded.Length -gt 28000) { throw 'Installation arguments are too long for a Windows elevation command.' }
@@ -203,7 +214,10 @@ try {
     Write-Host 'Requesting administrator approval. Installation continues in a separate window; waiting for its result...'
     try {
         $process = Start-Process -FilePath $shell -Verb RunAs -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', $encoded) -WorkingDirectory $env:SystemRoot -Wait -PassThru -ErrorAction Stop
-        try { return $process.ExitCode } finally { $process.Dispose() }
+        try {
+            Write-Host "Elevated installer exit code: $($process.ExitCode). Log: $(Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) "oci-mirror-proxy-installer\$($values['InfoID'])\install.log") (administrator access may be required)."
+            return $process.ExitCode
+        } finally { $process.Dispose() }
     } catch {
         $cause = $_.Exception
         while ($cause) {
@@ -257,32 +271,31 @@ function New-ServiceDefinition {
 }
 
 function Invoke-InstallerNative([string]$Executable, [string[]]$Arguments) {
-    $capture = Join-Path ([IO.Path]::GetTempPath()) ('oci-native-' + [Guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $capture -ErrorAction Stop | Out-Null
-    $stdoutFile = Join-Path $capture 'stdout'
-    $stderrFile = Join-Path $capture 'stderr'
-    $savedConsoleEncoding = [Console]::OutputEncoding
-    try {
-        # PS 5.1 wraps native stderr in ErrorRecords; only the process exit code
-        # determines native failure. File operations retain terminating errors.
-        $ErrorActionPreference = 'Continue'
-        $PSNativeCommandUseErrorActionPreference = $false
-        [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
-        # Native processes update the global automatic variable. A local variable
-        # would shadow that result and make every successful launch look missing.
-        $global:LASTEXITCODE = $null
-        & $Executable @Arguments 1> $stdoutFile 2> $stderrFile
-        $code = $global:LASTEXITCODE
-        $ErrorActionPreference = 'Stop'
-        if ($null -eq $code) { throw "Could not start $Executable" }
-        $stdout = Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction Stop
-        $stderr = Get-Content -LiteralPath $stderrFile -Raw -ErrorAction Stop
-        return [pscustomobject]@{ ExitCode = $code; Stdout = $stdout; Stderr = $stderr }
-    } finally {
-        [Console]::OutputEncoding = $savedConsoleEncoding
-        try { Remove-Item -LiteralPath $capture -Recurse -Force -ErrorAction Stop }
-        catch { Write-Warning "Could not remove native output directory ${capture}: $_" }
+    # Quote using the Windows CommandLineToArgvW/CRT rules, including empty
+    # arguments and backslashes before quotes or the closing quote. ArgumentList
+    # is unavailable in the .NET Framework used by Windows PowerShell 5.1.
+    $quoted = foreach ($argument in $Arguments) {
+        '"' + [regex]::Replace([regex]::Replace($argument, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1') + '"'
     }
+    $process = New-Object Diagnostics.Process
+    try {
+        $process.StartInfo.FileName = $Executable
+        $process.StartInfo.Arguments = $quoted -join ' '
+        $process.StartInfo.WorkingDirectory = (Get-Location).ProviderPath
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        $process.StartInfo.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+        $process.StartInfo.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
+        if (-not $process.Start()) { throw "Could not start $Executable" }
+        # Read both streams concurrently: sequential ReadToEnd can deadlock once
+        # either native pipe buffer fills. Neither stream enters PS's error flow.
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; Stdout = $stdout.GetAwaiter().GetResult(); Stderr = $stderr.GetAwaiter().GetResult() }
+    } finally { $process.Dispose() }
 }
 
 function Show-NativeResult($Result) {
@@ -580,8 +593,83 @@ function Assert-DockerUninstallSafe {
         Write-Warning 'Docker recovery skipped; settings may still reference this proxy.'
         return
     }
-    # Uninstall does not infer ownership or restore a historical configuration.
-    Write-Host 'Docker settings are preserved. Use dockerd revert to remove the proxy URL before uninstalling if needed.'
+    if ($NoService) { return }
+    $service = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
+    $expectedWrapper = Join-Path (Join-Path $Prefix 'service') "$ServiceName.exe"
+    if ($service -and ($service.PathName -cne ('"' + $expectedWrapper + '"') -or $service.StartName -notin @('LocalSystem', 'NT AUTHORITY\SYSTEM'))) {
+        throw "Service $ServiceName is not managed by this installation; Docker settings and installation were preserved."
+    }
+    $dockerSettings = Join-Path $env:USERPROFILE '.docker\daemon.json'
+    if (-not (Test-Path -LiteralPath $dockerSettings)) {
+        Write-Host 'No Docker Desktop daemon.json exists for the current user; no Docker settings to clean up.'
+        return
+    }
+    if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) {
+        if (-not $service) { return }
+        throw 'Cannot clean up Docker integration because the installed executable is missing. Restore it, clean up Docker settings manually, or rerun uninstall with -SkipDocker.'
+    }
+    Write-Host 'Removing this proxy from the current Docker user settings before uninstalling...'
+    try {
+        $result = Invoke-InstallerNative $destination @('dockerd', 'revert', '--admin-socket', $adminPipe, '--no-reload')
+        Show-NativeResult $result
+        if ($result.ExitCode -ne 0) { throw "dockerd revert exited with code $($result.ExitCode)" }
+    } catch {
+        $exe = $destination.Replace("'", "''")
+        $endpoint = $adminPipe.Replace("'", "''")
+        Write-Host "Retry as the Docker user: & '$exe' dockerd revert --admin-socket '$endpoint' --no-reload"
+        throw "Docker cleanup failed; uninstall aborted and service/executable preserved. Fix the error and retry, or explicitly use -SkipDocker. $_"
+    }
+    Write-Host 'Docker configuration cleanup completed. Docker was not restarted; restart Docker Desktop to load any changes.'
+}
+
+function Start-InstallerLog([string]$RunID, [switch]$System) {
+    if ($RunID -notmatch '^[a-f0-9]{32}$') { throw 'Invalid installer log ID.' }
+    $base = if ($System) { [Environment]::GetFolderPath('CommonApplicationData') } else { [Environment]::GetFolderPath('LocalApplicationData') }
+    $root = Join-Path $base 'oci-mirror-proxy-installer'
+    $directory = Join-Path $root $RunID
+    # No caller-selected output path, no inherited writable ACL, and no reparse
+    # points. An existing run directory is never reused by an elevated writer.
+    $parent = $directory
+    while ($parent) {
+        if ((Test-Path -LiteralPath $parent) -and ((Get-Item -LiteralPath $parent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Unsafe installer log path: $parent" }
+        $next = Split-Path -Parent $parent
+        if ($next -eq $parent) { break }
+        $parent = $next
+    }
+    if (Test-Path -LiteralPath $directory) { throw "Installer log directory already exists: $directory" }
+    if (-not (Test-Path -LiteralPath $root)) {
+        if ($System) {
+            $acl = New-Object Security.AccessControl.DirectorySecurity
+            $acl.SetAccessRuleProtection($true, $false)
+            $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+                $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+                $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+            }
+            # Apply security at creation, not afterwards: an inherited writable
+            # directory must never be briefly available to an unprivileged user.
+            $info = New-Object IO.DirectoryInfo($root)
+            if ($PSVersionTable.PSEdition -eq 'Core') { [IO.FileSystemAclExtensions]::Create($info, $acl) }
+            else { $info.Create($acl) }
+        } else { New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null }
+    }
+    # Validate after creation as well, including a competing directory creation.
+    # Never repair or write through a pre-existing untrusted shared root.
+    if ($System) {
+        if ((Get-Item -LiteralPath $root -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Unsafe installer log path: $root" }
+        $acl = Get-Acl -LiteralPath $root
+        $trusted = @('S-1-5-18', 'S-1-5-32-544')
+        $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($owner -notin $trusted) { throw "Untrusted installer log directory owner: $root" }
+        $writeRights = [Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+        foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+            if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $trusted -and ($rule.FileSystemRights -band $writeRights)) { throw "Writable installer log directory: $root" }
+        }
+    }
+    New-Item -ItemType Directory -Path $directory -ErrorAction Stop | Out-Null
+    $path = Join-Path $directory 'install.log'
+    Start-Transcript -LiteralPath $path -NoClobber -ErrorAction Stop | Out-Null
+    Write-Host "Installer log: $path"
 }
 
 function Remove-Installation {
@@ -622,6 +710,12 @@ function Remove-Installation {
     Write-Host "Uninstalled $destination. Configuration, caches and logs preserved. Docker was not restarted."
 }
 
+$installerTranscript = $false
+try {
+if (-not $ServiceStageOnly) {
+    Start-InstallerLog $InfoID -System:((Test-IsAdministrator) -and -not $NoService)
+    $installerTranscript = $true
+}
 if ($NoService -and -not $PSBoundParameters.ContainsKey('Prefix')) {
     $Prefix = Join-Path $env:LOCALAPPDATA 'oci-mirror-proxy'
 }
@@ -884,11 +978,11 @@ try {
         Write-Host "Installed $destination ($Version). Service $ServiceName is running and enabled at boot."
         Write-Host "Configuration: $Config"
         Write-Host "Logs: $logDir"
-        Write-Host "User CLI (no elevation required): & '$destination' version"
+        Write-Host "User CLI (no elevation required): & '$destination' status --admin-socket '$adminPipe'"
         Write-Host 'The binary directory is in system PATH. Open a new terminal to use oci-mirror-proxy as a normal user.'
         Write-Host 'User configuration remains separate; use init and serve as your normal user. Only service administration requires elevation.'
         Write-Host "Manage: Get-Service $ServiceName; Restart-Service $ServiceName; Stop-Service $ServiceName"
-        Write-Host "Admin CLI: & '$destination' status --admin-socket '$adminPipe'"
+        Write-Host 'The local management API is available to local users; private foreground instances remain account-only.'
     }
 } catch {
     $failure = $_
@@ -947,3 +1041,9 @@ try {
 # Enrollment is outside the service transaction. Docker conflicts must not roll
 # back a healthy proxy, and Desktop is never restarted without explicit consent.
 if (-not $ServiceStageOnly) { Connect-UserDocker }
+} catch {
+    Write-Host ($_ | Format-List * -Force | Out-String)
+    throw
+} finally {
+    if ($installerTranscript) { Stop-Transcript | Out-Null }
+}

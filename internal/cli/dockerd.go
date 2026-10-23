@@ -324,11 +324,11 @@ func activateIntegration(ctx context.Context, out io.Writer, needed bool, flags 
 	if flags.noReload || (flags.adapter.RequiresRestart() && !flags.restart) {
 		// The adapter's plan explains how to activate changes. Do not infer that
 		// all targets can be signalled like a Linux daemon.
-		fmt.Fprintln(out, "configuration saved; activation is pending (see plan notes)")
+		fmt.Fprintln(out, "Docker was not restarted or reloaded; loaded settings have not been verified (see plan notes)")
 		return nil
 	}
 	if err := flags.adapter.Activate(ctx, flags.restart); err != nil {
-		return fmt.Errorf("configuration saved but activation failed: %w", err)
+		return fmt.Errorf("Docker configuration activation failed (configuration files were preserved): %w", err)
 	}
 	fmt.Fprintln(out, "Docker configuration activated")
 	return nil

@@ -52,9 +52,14 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 		customService   bool
 		skipDocker      bool
 		dockerFail      bool
+		uninstall       bool
 	}{
 		{name: "first install"},
 		{name: "service applies Docker", service: true},
+		{name: "service uninstall cleans Docker before stop", service: true, uninstall: true},
+		{name: "service uninstall failure preserves installation", service: true, uninstall: true, dockerFail: true},
+		{name: "service uninstall explicitly skips Docker", service: true, uninstall: true, skipDocker: true},
+		{name: "macOS uninstall uses Desktop user", service: true, darwin: true, sudo: true, uninstall: true},
 		{name: "user service elevates only system operations", service: true, unprivileged: true},
 		{name: "user macOS service retains Desktop identity", service: true, darwin: true, unprivileged: true},
 		{name: "denied service elevation preserves installation", service: true, unprivileged: true, denySudo: true},
@@ -244,7 +249,7 @@ case "$1" in
         ;;
     dockerd)
         case "$2" in
-            apply)
+            apply|revert)
                 [ "$TEST_DOCKER_FAIL" != true ] || exit 1
                 echo 'Docker integration: active'
                 ;;
@@ -358,6 +363,39 @@ esac
 				}
 				write(filepath.Join(prefix, "bin", "oci-mirror-proxy"), "previous executable\n", 0o755)
 				write(logPath, "", 0o600)
+			}
+			if tc.uninstall {
+				first := exec.CommandContext(t.Context(), "sh", args...)
+				first.Env = append(cmd.Environ(), "TEST_DOCKER_FAIL=false")
+				if out, err := first.CombinedOutput(); err != nil {
+					t.Fatalf("install before removal: %v\n%s", err, out)
+				}
+				write(logPath, "", 0o600)
+				removeArgs := []string{scriptPath, "uninstall", "--prefix", prefix}
+				if tc.skipDocker {
+					removeArgs = append(removeArgs, "--skip-docker")
+				}
+				remove := exec.CommandContext(t.Context(), "sh", removeArgs...)
+				remove.Env = cmd.Environ()
+				out, err := remove.CombinedOutput()
+				log, _ := os.ReadFile(logPath)
+				revert := bytes.Index(log, []byte("dockerd revert"))
+				stop := bytes.Index(log, []byte("systemctl stop"))
+				if tc.darwin {
+					stop = bytes.Index(log, []byte("launchctl bootout"))
+					if !bytes.Contains(log, []byte("sudo-user")) {
+						t.Fatalf("Desktop cleanup lost user identity:\n%s", log)
+					}
+				}
+				_, binaryErr := os.Stat(filepath.Join(prefix, "bin", "oci-mirror-proxy"))
+				if tc.dockerFail {
+					if err == nil || binaryErr != nil || revert < 0 || stop >= 0 {
+						t.Fatalf("cleanup failure destroyed installation: %v\n%s\n%s", err, log, out)
+					}
+				} else if err != nil || !os.IsNotExist(binaryErr) || stop < 0 || (!tc.skipDocker && (revert < 0 || revert > stop)) || (tc.skipDocker && revert >= 0) {
+					t.Fatalf("incorrect cleanup order: %v\n%s\n%s", err, log, out)
+				}
+				return
 			}
 			out, runErr := cmd.CombinedOutput()
 			log, _ := os.ReadFile(logPath)

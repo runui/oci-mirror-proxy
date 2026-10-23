@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -8,10 +9,78 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
 
 	"github.com/runui/oci-mirror-proxy/internal/unixhttp"
 )
+
+func TestWindowsSystemPipeDACL(t *testing.T) {
+	owner, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sddl := pipeSecurityDescriptor(owner)
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil || dacl.AceCount != 3 {
+		t.Fatalf("unexpected system DACL: %s, %v", sddl, err)
+	}
+	var ace *windows.ACCESS_ALLOWED_ACE
+	if err := windows.GetAce(dacl, 2, &ace); err != nil {
+		t.Fatal(err)
+	}
+	sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+	const clientAccess = (windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE) &^ windows.FILE_APPEND_DATA
+	if !sid.IsWellKnown(windows.WinBuiltinUsersSid) || ace.Mask != clientAccess || ace.Mask&(windows.WRITE_DAC|windows.WRITE_OWNER|windows.FILE_APPEND_DATA) != 0 {
+		t.Fatalf("unsafe client ACE: %s", sddl)
+	}
+}
+
+func TestWindowsRestrictedClientPipeAccess(t *testing.T) {
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Grant the test owner server rights, but inspect a separate client-only ACE
+	// above. Exercise client I/O with the exact reduced access mask here.
+	path := filepath.Join(t.TempDir(), "restricted.sock")
+	ln, err := winio.ListenPipe(mustPipePath(t, path), &winio.PipeConfig{SecurityDescriptor: pipeSecurityDescriptor(user.User.Sid)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ok") })}
+	go srv.Serve(ln)
+	defer srv.Close()
+	client := unixhttp.Client(path, 0)
+	defer client.CloseIdleConnections()
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://admin/", nil)
+	resp, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status)
+	}
+}
+
+func mustPipePath(t *testing.T, path string) string {
+	t.Helper()
+	pipe, err := unixhttp.PipePath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pipe
+}
 
 func TestWindowsPipeLongPathAndPrivateDACL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), strings.Repeat("long", 40), "admin.sock")

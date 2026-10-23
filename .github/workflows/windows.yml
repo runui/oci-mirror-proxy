@@ -25,12 +25,27 @@ jobs:
       - name: Test (including PowerShell installers)
         env:
           REQUIRE_WINDOWS_SHELLS: '1'
+          REQUIRE_WINDOWS_ADMIN_TESTS: '1'
         run: go test -count=1 -timeout 5m ./...
       - name: Race detector
+        env:
+          REQUIRE_WINDOWS_SHELLS: '1'
+          REQUIRE_WINDOWS_ADMIN_TESTS: '1'
         run: go test -race -count=1 -timeout 5m ./...
       - name: Windows service installation, update and rollback
         shell: pwsh
+        env:
+          WINDOWS_SERVICE_DIAGNOSTICS: ${{ runner.temp }}/windows-service-diagnostics
         run: ./internal/tests/install/test-windows-service.ps1
+      - name: Upload Windows service diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-service-diagnostics
+          path: |
+            ${{ runner.temp }}/windows-service-diagnostics
+            C:/ProgramData/oci-mirror-proxy-installer
+          if-no-files-found: ignore
       - name: Build amd64 and arm64
         shell: pwsh
         run: |

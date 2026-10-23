@@ -115,7 +115,9 @@ Docker 不会自动重启；如需重启，请按脚本输出操作。
 Docker Desktop 的镜像加速设置仅支持 Docker Hub，因此可能跳过其他 registry。
 提示等待重启表示配置已保存但尚未生效；安装器不会自动重启 Docker 或中断运行中的容器。
 
-卸载保留配置、缓存、日志及 Docker 设置。卸载代理前请按需运行 `dockerd revert` 移除对应镜像地址。
+卸载服务前会先从当前 Docker 用户的配置中移除本代理，保留其他镜像源和设置；清理失败则中止卸载。
+如需明确保留 Docker 设置，使用 Windows 的 `-SkipDocker` 或 Unix 的 `--skip-docker`。
+代理配置、缓存和日志会保留。仅卸载二进制时不会修改 Docker 设置。
 手动恢复方法见[运维指南](docs/zh-CN/operations.md)。
 
 更多选项见 `sh install.sh --help` 或 `Get-Help .\install.ps1 -Full`。

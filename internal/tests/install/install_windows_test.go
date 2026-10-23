@@ -38,7 +38,29 @@ func isolateWindowsInstallerPaths(script string) string {
 	} {
 		script = regexp.MustCompile(`(?ms)^function `+name+`(?:\([^\n]*\))? \{.*?^}\r?\n\r?\n`).ReplaceAllStringFunc(script, func(string) string { return replacement + "\n\n" })
 	}
-	return script
+	return isolateWindowsInstallerLogs(script)
+}
+
+func isolateWindowsInstallerLogs(script string) string {
+	// Keep transcripts inside the fixture, including simulated elevated children.
+	script = strings.ReplaceAll(script, "[Environment]::GetFolderPath('LocalApplicationData')", "$env:TEMP")
+	return regexp.MustCompile(`(?ms)^function Start-InstallerLog\(.*?^}`).ReplaceAllStringFunc(script, func(string) string {
+		return `function Start-InstallerLog([string]$RunID, [switch]$System) {
+    $path = Join-Path $env:TEMP ("installer-" + $RunID + '.log')
+    Start-Transcript -LiteralPath $path -NoClobber | Out-Null
+    Write-Host "Installer log: $path"
+}`
+	})
+}
+
+func hasInstallerTemporaryFiles(entries []os.DirEntry) bool {
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "installer-") && strings.HasSuffix(entry.Name(), ".log") && !entry.IsDir() {
+			continue // Transcripts intentionally survive installation and failure.
+		}
+		return true
+	}
+	return false
 }
 
 func isolatedWindowsInstaller(t *testing.T, root string) string {
@@ -140,7 +162,7 @@ func TestWindowsInstaller(t *testing.T) {
 				}
 				out, err := cmd.CombinedOutput()
 				entries, readErr := os.ReadDir(tmp)
-				if readErr != nil || len(entries) != 0 {
+				if readErr != nil || hasInstallerTemporaryFiles(entries) {
 					t.Fatalf("installer left temporary files: %v %v", entries, readErr)
 				}
 				if err != nil {
@@ -370,7 +392,7 @@ if ($failed) { exit 1 }
 						}
 					}
 					entries, err := os.ReadDir(tmp)
-					if err != nil || len(entries) != 0 {
+					if err != nil || hasInstallerTemporaryFiles(entries) {
 						t.Fatalf("temporary files remain: %v %v", entries, err)
 					}
 					entries, err = os.ReadDir(filepath.Dir(exe))
@@ -407,7 +429,7 @@ func TestWindowsInstallerBuildElevationDirectory(t *testing.T) {
 			if err := os.Mkdir(source, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			script, err := filepath.Abs(filepath.Join("..", "..", "..", "install.ps1"))
+			script, err := filepath.Abs(isolatedWindowsInstaller(t, work))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -415,8 +437,10 @@ func TestWindowsInstallerBuildElevationDirectory(t *testing.T) {
 			if err := os.WriteFile(runner, []byte(`
 $ErrorActionPreference = 'Stop'
 $ast = [Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$null, [ref]$null)
-$fn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-ElevatedInstaller' }, $true)
-. ([scriptblock]::Create($fn.Extent.Text))
+foreach ($name in @('Invoke-ElevatedInstaller', 'Start-InstallerLog')) {
+    $fn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
 function Start-Process {
     param($FilePath, $Verb, $ArgumentList, $WorkingDirectory, [switch]$Wait, [switch]$PassThru, $ErrorAction)
     $bootstrap = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($ArgumentList[-1]))
@@ -424,13 +448,13 @@ function Start-Process {
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
     # Simulate the elevated process starting in the system directory, without UAC.
     Push-Location -LiteralPath $WorkingDirectory
-    try { & $FilePath -NoLogo -NoProfile -EncodedCommand $encoded } finally { Pop-Location }
+    try { & $FilePath -NoLogo -NoProfile -EncodedCommand $encoded | Out-Host } finally { Pop-Location }
     $result = [pscustomobject]@{ ExitCode = $LASTEXITCODE }
     $result | Add-Member ScriptMethod Dispose {}
     return $result
 }
 $capture = Join-Path $env:TEMP 'capture.ps1'
-[IO.File]::WriteAllText($capture, 'param([switch]$Build, [switch]$NoElevate); if ((Get-Location).ProviderPath -cne $env:TEST_SOURCE) { throw "Local build directory lost during elevation" }')
+[IO.File]::WriteAllText($capture, 'param([switch]$Build, [switch]$NoElevate, [string]$InfoID); if ((Get-Location).ProviderPath -cne $env:TEST_SOURCE) { throw "Local build directory lost during elevation" }')
 Set-Location -LiteralPath $env:TEST_SOURCE
 $code = Invoke-ElevatedInstaller $capture @{ Build = $true } ''
 if ($code -ne 0) { throw "Elevated build failed: $code" }
@@ -486,7 +510,11 @@ func main() {
    if os.Getenv("TEST_SCENARIO")=="invalid info" { fmt.Println("{}"); return }
    fmt.Println("{\"schema_version\":1,\"config\":{\"proxy_url\":\"http://127.0.0.1:24817\",\"registries\":[{\"alias\":\"docker.io\",\"origin\":\"https://registry-1.docker.io\"}]}}")
   case "dockerd":
-   fmt.Fprintln(os.Stderr, "warning: skipping gcr.io")
+    fmt.Fprintln(os.Stderr, "warning: skipping gcr.io")
+    if len(args)>1 && args[1]=="revert" {
+     f,err:=os.OpenFile(os.Getenv("TEST_LOG"),os.O_APPEND|os.O_WRONLY|os.O_CREATE,0600); if err!=nil { panic(err) }; fmt.Fprintln(f,"dockerd revert"); f.Close()
+     if os.Getenv("TEST_SCENARIO")=="uninstall failure" { os.Exit(17) }
+    }
    if os.Getenv("TEST_SCENARIO")=="docker failure" { os.Exit(17) }
  default: os.Exit(1)
  }
@@ -558,7 +586,7 @@ func main() {
 		if err != nil {
 			continue
 		}
-		for _, testCase := range []string{"install", "existing wildcard config", "sync failure", "info failure", "invalid info", "docker failure", "update", "failed install", "failed update", "custom definition", "custom account", "bad wrapper", "build install", "build update", "build failed update"} {
+		for _, testCase := range []string{"install", "existing wildcard config", "sync failure", "info failure", "invalid info", "docker failure", "update", "failed install", "failed update", "custom definition", "custom account", "bad wrapper", "build install", "build update", "build failed update", "uninstall", "uninstall failure", "uninstall skip"} {
 			t.Run(shell+"/"+testCase, func(t *testing.T) {
 				scenario := strings.TrimPrefix(testCase, "build ")
 				work := windowsInstallerTempDir(t)
@@ -589,6 +617,7 @@ $global:fixtureExists = $false
 $global:fixtureStatus = 'Stopped'
 function Invoke-WebRequest {
  param($Uri, $OutFile, $Headers, $TimeoutSec, [switch]$UseBasicParsing)
+ if ($ProgressPreference -ne 'SilentlyContinue') { throw 'Download progress was not suppressed' }
  if ($Uri -like '*WinSW.NET4.exe') {
   [IO.File]::WriteAllText($OutFile, "WinSW fixture` + "`n" + `")
  } else { Microsoft.PowerShell.Utility\Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing }
@@ -627,7 +656,18 @@ if ($env:TEST_SCENARIO -eq 'existing wildcard config') {
  New-Item -ItemType Directory -Path (Split-Path -Parent $env:TEST_CONFIG) -Force | Out-Null
  [IO.File]::WriteAllText($env:TEST_CONFIG, $preservedConfig)
 }
+$env:USERPROFILE = Join-Path $env:TEMP 'docker-user'
+[IO.Directory]::CreateDirectory((Join-Path $env:USERPROFILE '.docker')) | Out-Null
+[IO.File]::WriteAllText((Join-Path $env:USERPROFILE '.docker\daemon.json'), '{}')
 & $env:TEST_INSTALLER @params
+if ($env:TEST_SCENARIO -like 'uninstall*') {
+    $remove = @{ Command='uninstall'; Prefix=$env:TEST_PREFIX; Config=$env:TEST_CONFIG; SkipDocker=($env:TEST_SCENARIO -eq 'uninstall skip') }
+    try { & $env:TEST_INSTALLER @remove } catch {
+        if ($env:TEST_SCENARIO -ne 'uninstall failure' -or $_ -notlike '*uninstall aborted*') { throw }
+        Write-Host "EXPECTED_FAILURE: $_"
+    }
+    return
+}
 if ($env:GOCACHE -cne (Join-Path $env:TEMP 'caller-cache') -or $env:GOMODCACHE -cne (Join-Path $env:TEMP 'caller-modules') -or $env:GOPATH -cne (Join-Path $env:TEMP 'caller-gopath')) { throw 'Build cache environment was not restored' }
 if (Test-Path Env:GOPROXY) { throw 'Build proxy environment was not restored' }
 foreach ($path in @($env:GOCACHE,$env:GOMODCACHE,$env:GOPATH)) { if (Test-Path -LiteralPath $path) { throw 'Elevated build wrote into caller caches' } }
@@ -636,7 +676,10 @@ $global:fixtureStatus = 'Running'
 Set-Service oci-mirror-proxy Manual
 if ($env:TEST_SCENARIO -eq 'custom definition') { Add-Content "$env:TEST_PREFIX\service\oci-mirror-proxy.xml" '<!-- custom -->' }
 if ($env:TEST_SCENARIO -eq 'bad wrapper') { [IO.File]::WriteAllText("$env:TEST_PREFIX\service\oci-mirror-proxy.exe", 'custom wrapper') }
-[IO.File]::WriteAllText("$env:TEST_PREFIX\bin\oci-mirror-proxy.exe", 'previous binary')
+for ($attempt = 0; ; $attempt++) {
+    try { [IO.File]::WriteAllText("$env:TEST_PREFIX\bin\oci-mirror-proxy.exe", 'previous binary'); break }
+    catch { if ($attempt -ge 10) { throw }; [Threading.Thread]::Sleep(50) }
+}
 [IO.File]::WriteAllText($env:TEST_CONFIG, $preservedConfig)
 try { & $env:TEST_INSTALLER @params -Update } catch { Write-Output "EXPECTED_FAILURE: $_" }
 if (Test-Path Env:GOPROXY) { throw 'Update proxy environment was not restored' }
@@ -670,8 +713,26 @@ if ($global:fixtureStatus -ne 'Running') { throw 'Previous service was not resto
 				if err != nil {
 					t.Fatalf("installer fixture: %v\n%s", err, out)
 				}
+				if bytes.Contains(out, []byte("NativeCommandError")) || (!bytes.Contains(out, []byte("EXPECTED_FAILURE")) && bytes.Contains(out, []byte("CategoryInfo"))) {
+					t.Fatalf("native warning was formatted as a PowerShell error:\n%s", out)
+				}
 				ops, _ := os.ReadFile(log)
 				installed, readErr := os.ReadFile(filepath.Join(prefix, "bin", "oci-mirror-proxy.exe"))
+				if strings.HasPrefix(scenario, "uninstall") {
+					revert := bytes.Index(ops, []byte("dockerd revert"))
+					stop := bytes.Index(ops, []byte("stop"))
+					if scenario == "uninstall failure" {
+						if readErr != nil || !bytes.Equal(installed, payload) || stop >= 0 || revert < 0 {
+							t.Fatalf("failed cleanup removed installation: %v\n%s\n%s", readErr, ops, out)
+						}
+					} else if !os.IsNotExist(readErr) || stop < 0 || (scenario == "uninstall" && (revert < 0 || revert > stop)) || (scenario == "uninstall skip" && revert >= 0) {
+						t.Fatalf("incorrect uninstall ordering: %v\n%s\n%s", readErr, ops, out)
+					}
+					if _, err := os.Stat(configPath); err != nil {
+						t.Fatal("uninstall removed proxy configuration:", err)
+					}
+					return
+				}
 				matchesPayload := bytes.Equal(installed, payload)
 				if strings.HasPrefix(testCase, "build ") && (scenario == "install" || scenario == "update") {
 					out, err := exec.CommandContext(t.Context(), filepath.Join(prefix, "bin", "oci-mirror-proxy.exe"), "status").CombinedOutput()
@@ -772,7 +833,7 @@ func TestWindowsInstallerElevation(t *testing.T) {
 			t.Run(shell+"/"+scenario, func(t *testing.T) {
 				root := windowsInstallerTempDir(t)
 				installer := filepath.Join(root, "installer with spaces.ps1")
-				script := regexp.MustCompile(`(?ms)^function Test-IsAdministrator \{.*?^}`).ReplaceAllString(string(original), `function Test-IsAdministrator { return ($$env:TEST_SCENARIO -eq 'administrator') }`)
+				script := regexp.MustCompile(`(?ms)^function Test-IsAdministrator \{.*?^}`).ReplaceAllString(isolateWindowsInstallerLogs(string(original)), `function Test-IsAdministrator { return ($$env:TEST_SCENARIO -eq 'administrator') }`)
 				// Exercise the real elevation transport without network/compiler work.
 				script = regexp.MustCompile(`(?ms)^function Prepare-Installation \{.*?^}`).ReplaceAllString(script, `function Prepare-Installation {
     $$binary = Join-Path $$tempDir 'prepared.exe'
@@ -820,7 +881,7 @@ function Start-Process {
  $condition = if ($env:TEST_SCENARIO -eq 'not elevated') { 'if ($true)' } else { 'if ($false)' }
  $bootstrap = $bootstrap.Replace('if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))', $condition)
  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
- & $FilePath -NoLogo -NoProfile -EncodedCommand $encoded
+ & $FilePath -NoLogo -NoProfile -EncodedCommand $encoded | Out-Host
  $result = [pscustomobject]@{ ExitCode=$LASTEXITCODE }
  $result | Add-Member ScriptMethod Dispose {}
  return $result
@@ -829,7 +890,15 @@ $params = @{ Prefix=$env:TEST_PREFIX; Config=$env:TEST_CONFIG; Update=$true; NoS
 switch ($env:TEST_SCENARIO) {
  'no elevate' { $params.NoElevate=$true }
  'no service' { $params.NoService=$true }
- 'build' { $params.Build=$true }
+  'build' {
+    $params.Build=$true
+    # Reproduce setup-go/multiple toolchains even on hosts with only one Go.
+    # Preparation is mocked, so this secondary command must never be executed.
+    $otherGo = Join-Path $env:TEMP 'other-toolchain'
+    New-Item -ItemType Directory -Path $otherGo | Out-Null
+    [IO.File]::WriteAllText((Join-Path $otherGo 'go.exe'), 'not the selected compiler')
+    $env:PATH += [IO.Path]::PathSeparator + $otherGo
+  }
  'switch false' { $params.Build=$false; $params.NoElevate=$false }
 }
 try { & $env:TEST_INSTALLER @params; exit $LASTEXITCODE } catch {
@@ -1074,12 +1143,14 @@ foreach ($name in @('Invoke-InstallerNative', 'Show-NativeResult', 'Write-Docker
 }
 $env:OCI_NATIVE_FIXTURE = '1'
 $env:OCI_NATIVE_MARKER = Join-Path $env:TEMP 'marker'
-$arguments = @('-test.run=^TestWindowsNativeFixture$', '--', 'path with spaces', "single'quote")
+$arguments = @('-test.run=^TestWindowsNativeFixture$', '--', 'path with spaces', "single'quote", '', 'embedded"quote', 'C:\path with spaces\', 'backslash\"quote')
 $result = Invoke-InstallerNative $env:TEST_FIXTURE $arguments
 if ($result.ExitCode -ne 0 -or ($result.Stdout | ConvertFrom-Json).message -ne ('native stdout ' + [char]0x4e2d + [char]0x6587) -or $result.Stderr -notmatch 'warning: native stderr') { throw 'Native streams were not isolated' }
 if ($ErrorActionPreference -ne 'Stop') { throw 'Preference leaked' }
 $marker = [IO.File]::ReadAllText($env:OCI_NATIVE_MARKER)
-if (-not $marker.Contains('path with spaces') -or -not $marker.Contains("single'quote")) { throw 'Arguments corrupted' }
+$expected = $arguments -join [char]10
+if (-not $marker.EndsWith($expected)) { throw "Arguments corrupted: $marker" }
+Show-NativeResult $result
 $env:OCI_NATIVE_FAIL = '1'
 $result = Invoke-InstallerNative $env:TEST_FIXTURE $arguments
 if ($result.ExitCode -ne 17) { throw 'Native exit code lost' }
@@ -1109,7 +1180,7 @@ if (@(Get-ChildItem -LiteralPath $env:TEMP -Filter 'oci-native-*').Count -ne 0) 
 			cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", runner)
 			cmd.Env = append(os.Environ(), "TEST_INSTALLER="+installer, "TEST_FIXTURE="+fixture, "TEMP="+root, "TMP="+root)
 			out, err := cmd.CombinedOutput()
-			if err != nil || strings.Contains(string(out), "Proxy installation succeeded") {
+			if err != nil || strings.Contains(string(out), "Proxy installation succeeded") || strings.Contains(string(out), "NativeCommandError") || strings.Contains(string(out), "CategoryInfo") {
 				t.Fatalf("native stderr: %v\n%s", err, out)
 			}
 		})
@@ -1230,6 +1301,90 @@ func TestWindowsInstallerUninstallCommand(t *testing.T) {
 			}
 			if _, err := os.Stat(config); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestWindowsInstallerLogging(t *testing.T) {
+	for _, shell := range []string{"powershell.exe", "pwsh.exe"} {
+		binary, err := exec.LookPath(shell)
+		if err != nil {
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			root := windowsInstallerTempDir(t)
+			installer, err := filepath.Abs(filepath.Join("..", "..", "..", "install.ps1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner := `
+$ErrorActionPreference = 'Stop'
+$ast = [Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$null, [ref]$null)
+$fn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Start-InstallerLog' }, $true)
+$text = $fn.Extent.Text.Replace("[Environment]::GetFolderPath('LocalApplicationData')", '$env:TEMP').Replace("[Environment]::GetFolderPath('CommonApplicationData')", '$env:TEMP')
+. ([scriptblock]::Create($text))
+$id = [Guid]::NewGuid().ToString('N')
+Start-InstallerLog $id
+try {
+    Write-Host 'fixture stdout'
+    Write-Warning 'fixture warning'
+    try { throw 'fixture installation failed' } catch { Write-Host ($_ | Format-List * -Force | Out-String) }
+} finally { Stop-Transcript | Out-Null }
+$path = Join-Path $env:TEMP ('oci-mirror-proxy-installer\' + $id + '\install.log')
+$content = [IO.File]::ReadAllText($path)
+foreach ($expected in @('fixture stdout', 'fixture warning', 'fixture installation failed', 'ScriptStackTrace')) {
+    if (-not $content.Contains($expected)) { throw "Missing transcript output: $expected" }
+}
+try { Start-InstallerLog $id; throw 'Existing log overwritten' } catch { if ($_ -notlike '*already exists*') { throw } }
+try { Start-InstallerLog '..\escape'; throw 'Unsafe ID accepted' } catch { if ($_ -notlike '*Invalid installer log ID*') { throw } }
+if ([IO.File]::ReadAllText($path) -cne $content) { throw 'Log was modified on retry' }
+# Explicitly make the shared root writable by ordinary users. The creator may
+# be an elevated administrator on CI, so its default owner/ACL is not evidence
+# that the directory is untrusted.
+$shared = Join-Path $env:TEMP 'oci-mirror-proxy-installer'
+$acl = Get-Acl -LiteralPath $shared
+$users = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')
+$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($users, 'Write', 'Allow')))
+Set-Acl -LiteralPath $shared -AclObject $acl
+try { Start-InstallerLog ([Guid]::NewGuid().ToString('N')) -System; throw 'Untrusted shared directory accepted' }
+catch { if ($_ -notlike '*Untrusted installer log directory owner*' -and $_ -notlike '*Writable installer log directory*') { throw } }
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+$elevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($env:REQUIRE_WINDOWS_ADMIN_TESTS -eq '1' -and -not $elevated) { throw 'CI must exercise elevated log ACL creation.' }
+if ($elevated) {
+    # On windows-latest, exercise real protected directory creation in both
+    # .NET Framework (5.1) and .NET (7), then test reuse and unsafe ACL rejection.
+    $env:TEMP = Join-Path $env:TEMP 'system-logs'
+    New-Item -ItemType Directory -Path $env:TEMP | Out-Null
+    for ($i = 0; $i -lt 2; $i++) {
+        Start-InstallerLog ([Guid]::NewGuid().ToString('N')) -System
+        Stop-Transcript | Out-Null
+    }
+    $shared = Join-Path $env:TEMP 'oci-mirror-proxy-installer'
+    $acl = Get-Acl -LiteralPath $shared
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544' -or -not $acl.AreAccessRulesProtected) { throw 'System log root is not protected and administrator-owned.' }
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    if ($rules.Count -ne 2 -or @($rules | Where-Object { $_.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544') -or $_.AccessControlType -ne 'Allow' -or $_.FileSystemRights -ne 'FullControl' }).Count) { throw 'System logs have unexpected access rules.' }
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($users, 'Write', 'Allow')))
+    Set-Acl -LiteralPath $shared -AclObject $acl
+    try { Start-InstallerLog ([Guid]::NewGuid().ToString('N')) -System; throw 'Writable administrator-owned directory accepted' }
+    catch { if ($_ -notlike '*Writable installer log directory*') { throw } }
+}
+`
+			path := filepath.Join(root, "logging.ps1")
+			if err := os.WriteFile(path, []byte(runner), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
+			for _, env := range os.Environ() {
+				if !strings.HasPrefix(strings.ToUpper(env), "PSMODULEPATH=") {
+					cmd.Env = append(cmd.Env, env)
+				}
+			}
+			cmd.Env = append(cmd.Env, "TEST_INSTALLER="+installer, "TEMP="+root, "TMP="+root)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("installer logging: %v\n%s", err, out)
 			}
 		})
 	}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,13 @@ import (
 
 	"github.com/runui/oci-mirror-proxy/internal/config"
 )
+
+func TestAdminPermissionError(t *testing.T) {
+	err := adminPermissionError("test-endpoint", os.ErrPermission)
+	if !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), "test-endpoint") || !strings.Contains(err.Error(), "endpoint permissions") || strings.Contains(err.Error(), "update and restart") {
+		t.Fatalf("misleading permission error: %v", err)
+	}
+}
 
 func TestDiscoverConfigPath(t *testing.T) {
 	dir := t.TempDir()

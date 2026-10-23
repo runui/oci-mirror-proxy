@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
 )
 
 // PipePath accepts local named pipes, Unix sockets (for explicit test/engine
@@ -46,7 +47,10 @@ func dialer(path string) func(context.Context, string, string) (net.Conn, error)
 		if err != nil {
 			return nil, err
 		}
-		conn, err := winio.DialPipeContext(ctx, pipe)
+		// GENERIC_WRITE includes FILE_CREATE_PIPE_INSTANCE for named pipes. Only
+		// request client I/O rights, so shared service pipes need not grant it.
+		access := uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE) &^ uint32(windows.FILE_APPEND_DATA)
+		conn, err := winio.DialPipeAccess(ctx, pipe, access)
 		if err != nil {
 			return nil, fmt.Errorf("dial local endpoint %s: %w", path, err)
 		}

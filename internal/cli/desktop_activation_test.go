@@ -34,8 +34,8 @@ func TestDesktopActivationWithoutFileChanges(t *testing.T) {
 		if (a.calls == 1) != restart {
 			t.Fatalf("restart=%v: activation calls=%d", restart, a.calls)
 		}
-		if !restart && !bytes.Contains(out.Bytes(), []byte("pending")) {
-			t.Fatalf("missing pending activation message: %s", &out)
+		if !restart && (!bytes.Contains(out.Bytes(), []byte("loaded settings have not been verified")) || bytes.Contains(out.Bytes(), []byte("configuration saved"))) {
+			t.Fatalf("incorrect unchanged-file activation message: %s", &out)
 		}
 	}
 }

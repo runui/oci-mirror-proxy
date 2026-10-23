@@ -59,7 +59,8 @@ Saving does not reload; use `POST /v1/reload` to apply changes.
 ### Windows and Docker Desktop
 
 The Windows installer starts the proxy as an automatically started Windows
-service. In an Administrator PowerShell, use:
+service. Status queries and the local management API work from a normal PowerShell;
+editing protected service files and starting/stopping Windows services require elevation:
 
 ```powershell
 $proxy = "$env:ProgramFiles\oci-mirror-proxy\bin\oci-mirror-proxy.exe"
@@ -78,9 +79,24 @@ Start-Service oci-mirror-proxy
 
 Service configuration is `%ProgramData%\oci-mirror-proxy\config.yaml` and logs
 are in `%ProgramData%\oci-mirror-proxy\logs`. With a custom service name, replace
-the service name and pipe name in these commands. To remove the service, stop it
-and run `& "$env:ProgramFiles\oci-mirror-proxy\service\oci-mirror-proxy.exe" uninstall`;
-configuration and logs are kept.
+the service name and pipe name in these commands. To uninstall, run
+`.\install.ps1 uninstall` as the Docker user and approve UAC when requested.
+It removes this proxy from the current Docker settings before stopping the service;
+cleanup failure preserves the installation. `-SkipDocker` explicitly skips cleanup.
+Docker is not restarted; configuration and logs are kept. Do not stop the proxy
+before cleanup: `dockerd revert` obtains its target from the running service.
+
+Local users can both query and modify the system service through its management
+API. Private foreground instances remain restricted to their owning account;
+remote pipe connections are rejected. Install the updated binary and restart the
+service once to apply a changed pipe ACL.
+
+Each Windows installer run prints a persistent transcript path. User-stage logs
+are under `%LOCALAPPDATA%\oci-mirror-proxy-installer\<run-id>\install.log`;
+elevated-stage logs are under `%ProgramData%\oci-mirror-proxy-installer\<run-id>\install.log`
+and require administrator access. The original window prints the elevated exit
+code and log path even if the elevated window closes. Download progress is hidden;
+native warnings are plain text and do not by themselves indicate failure.
 
 The system-installed executable is also usable without elevation. Use the full
 `$proxy` path above, or open a new terminal and run `oci-mirror-proxy` directly:

@@ -3,6 +3,13 @@
 # rather than adding separate scripts for individual features or scenarios.
 # Isolated SCM integration check for elevated Windows CI runners.
 $ErrorActionPreference = 'Stop'
+# A local non-elevated pass is not a substitute for this integration suite.
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'SCM integration checks require an elevated Windows runner.' }
+Write-Host "SCM runner: $([Environment]::OSVersion.VersionString); PowerShell $($PSVersionTable.PSVersion)"
+foreach ($tool in @('powershell.exe','pwsh.exe','python','go')) {
+    Get-Command $tool -CommandType Application -ErrorAction Stop | Select-Object Name,Source | Out-Host
+}
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 $id = 'oci-mirror-proxy-test-' + [Guid]::NewGuid().ToString('N')
 $root = Join-Path $env:ProgramFiles $id
@@ -36,6 +43,28 @@ function Wait-ProxyReady([string]$Binary, [string]$Pipe) {
         Start-Sleep -Milliseconds 500
     }
     throw 'Admin endpoint unavailable.'
+}
+
+function Save-ServiceDiagnostics([string]$ServiceName, [string]$Prefix, [string]$Config) {
+    # Capture before finally removes the isolated service and its log directory.
+    # Diagnostics must not hide the original installation/permission failure.
+    try {
+        $output = if ($env:WINDOWS_SERVICE_DIAGNOSTICS) { $env:WINDOWS_SERVICE_DIAGNOSTICS } else { Join-Path $fixture 'diagnostics' }
+        $output = Join-Path $output $ServiceName
+        New-Item -ItemType Directory -Path $output -Force | Out-Null
+        Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" | Format-List * | Out-String | Tee-Object -FilePath (Join-Path $output 'service.txt') | Out-Host
+        foreach ($path in @((Join-Path (Split-Path -Parent $Config) 'logs'), (Join-Path $Prefix 'service'))) {
+            if (Test-Path -LiteralPath $path) {
+                Get-ChildItem -LiteralPath $path -File -Recurse | Where-Object Extension -in @('.log','.xml') | ForEach-Object {
+                    Copy-Item -LiteralPath $_.FullName -Destination $output -Force
+                    if ($_.Extension -eq '.log') {
+                        Write-Host "Service diagnostic: $($_.FullName)"
+                        Get-Content -LiteralPath $_.FullName -Tail 100 | Out-Host
+                    }
+                }
+            }
+        }
+    } catch { Write-Warning "Could not collect service diagnostics: $_" }
 }
 try {
     New-Item -ItemType Directory -Path $fixture -Force | Out-Null
@@ -86,7 +115,9 @@ try {
         $installed = Join-Path $prefix 'bin/oci-mirror-proxy.exe'
         $wrapper = Join-Path $prefix "service/$serviceName.exe"
         $pipe = "\\.\pipe\$serviceName-admin"
-        $args = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $repo 'install.ps1'), '-Prefix', $prefix, '-Config', $config, '-ServiceName', $serviceName, '-Version', 'vtest', '-DownloadBaseUrl', $url)
+        # This suite owns a proxy service, not the runner's Docker installation.
+        # Docker setup/cleanup is covered by the isolated installer fixtures.
+        $args = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $repo 'install.ps1'), '-Prefix', $prefix, '-Config', $config, '-ServiceName', $serviceName, '-Version', 'vtest', '-DownloadBaseUrl', $url, '-SkipDocker')
         try {
             Invoke-Installer $shell $args
             if ($LASTEXITCODE -ne 0) { throw "Install failed in $shell" }
@@ -134,6 +165,9 @@ try {
             Compress-Archive -Path $binary -DestinationPath (Join-Path $release $asset)
             $hash = (Get-FileHash -LiteralPath (Join-Path $release $asset)).Hash
             [IO.File]::WriteAllText((Join-Path $release 'SHA256SUMS'), "$hash  $asset`n")
+        } catch {
+            Save-ServiceDiagnostics $serviceName $prefix $config
+            throw
         } finally {
             $currentPath = Get-PersistentPath 'Machine'
             $cleanPath = ($currentPath -split ';' | Where-Object { $_ -ine (Join-Path $prefix 'bin') }) -join ';'

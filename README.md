@@ -151,8 +151,10 @@ mirrors only Docker Hub, so other registries may be skipped. A pending restart
 means the settings were saved but are not yet active. The installer does not
 restart Docker or interrupt running containers automatically.
 
-Uninstall preserves configuration, caches and logs. If it detects Docker settings
-that need restoring, follow its instructions before retrying. See
+Service uninstall first removes this proxy from the invoking Docker user's current
+settings, preserving other mirrors and settings. Cleanup failure aborts removal;
+use `-SkipDocker` (Windows) or `--skip-docker` (Unix) to explicitly leave Docker unchanged.
+Proxy configuration, caches and logs are preserved. Binary-only removal does not edit Docker. See
 [operations](docs/operations.md) for manual recovery.
 
 For options, run `sh install.sh --help` or `Get-Help .\install.ps1 -Full`.

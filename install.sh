@@ -12,7 +12,8 @@ Options:
   install        Install (default). Existing parameter-only calls remain supported.
   update         Update; --update remains a supported alias.
   uninstall      Remove the selected binary and its managed service; preserve data.
-                 Revert managed Docker settings manually first, or --skip-docker.
+                  Service removal first removes this proxy from Docker settings;
+                  --skip-docker explicitly leaves Docker settings unchanged.
   --prefix DIR   Install into DIR/bin (default: /usr/local).
   --version TAG  Install this release tag (default: VERSION environment or latest).
   --build        Compile release source instead of downloading a binary.
@@ -454,8 +455,23 @@ if [ "$action" = uninstall ]; then
     done
     [ ! -e "$destination" ] || [ -f "$destination" ] || die 'installed binary is not a regular file'
     config=/etc/oci-mirror-proxy/config.yaml
-    if [ "$skip_docker" = false ]; then
-        printf 'Docker settings are preserved. Remove this proxy URL with dockerd revert before uninstalling if needed.\n'
+    if [ "$skip_docker" = true ]; then
+        printf 'Warning: Docker cleanup skipped; settings may still reference this proxy.\n' >&2
+    elif [ -n "$manager" ]; then
+        [ -x "$destination" ] || die 'cannot clean up Docker without the executable; restore it or explicitly use --skip-docker'
+        [ -z "$docker_identity_error" ] || die "Docker cleanup aborted: $docker_identity_error; installation preserved; use --skip-docker to opt out"
+        printf 'Removing this proxy from Docker configuration before stopping the service...\n'
+        if [ "$os" = darwin ]; then
+            run_docker_user "$destination" dockerd revert --admin-socket "$service_socket" --no-reload ||
+                die 'Docker cleanup failed; service and executable preserved. Retry dockerd revert as the Docker user, or rerun uninstall with --skip-docker'
+        else
+            # Linux daemon settings are system-owned; preserve the caller's
+            # selected endpoint rather than detecting root's Docker context.
+            case "$docker_endpoint" in unix:///*) ;; *) die 'Docker cleanup requires a local Unix Docker endpoint; use --skip-docker to opt out' ;; esac
+            run_system "$destination" dockerd revert --admin-socket "$service_socket" --docker-socket "${docker_endpoint#unix://}" --no-reload ||
+                die 'Docker cleanup failed; service and executable preserved. Retry dockerd revert, or rerun uninstall with --skip-docker'
+        fi
+        printf 'Docker configuration cleanup completed. Docker was not restarted; restart Docker to load any changes.\n'
     fi
     case "$manager" in
         systemd)

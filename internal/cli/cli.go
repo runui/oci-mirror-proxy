@@ -181,7 +181,7 @@ func discoverAdminSocket(user string, candidates []string) (string, error) {
 	for _, endpoint := range candidates {
 		if _, err := admin.NewClient(endpoint).Status(); err != nil {
 			if errors.Is(err, os.ErrPermission) {
-				return "", fmt.Errorf("permission denied accessing admin endpoint %s; update and restart the system service to enable local access, or use the owning account for a private instance: %w", endpoint, err)
+				return "", adminPermissionError(endpoint, err)
 			}
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
 				continue
@@ -197,6 +197,10 @@ func discoverAdminSocket(user string, candidates []string) (string, error) {
 		return found, nil
 	}
 	return user, nil
+}
+
+func adminPermissionError(endpoint string, err error) error {
+	return fmt.Errorf("permission denied accessing admin endpoint %s; for a system service, check its endpoint permissions or retry with administrator privileges; for a private instance, use its owning account: %w", endpoint, err)
 }
 
 func systemAdminSocket(goos string) string {
