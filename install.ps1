@@ -2,7 +2,7 @@
 
 <#
 .SYNOPSIS
-Install or update oci-mirror-proxy and its Windows service.
+Install, update or uninstall oci-mirror-proxy and its Windows service.
 .DESCRIPTION
 Requests UAC approval when needed to install and start the automatic service.
 The default installation uses WinSW v2.12.0 (.NET Framework 4.x required), starts
@@ -16,6 +16,10 @@ PATH with NoService. Existing entries are preserved and duplicate additions are
 avoided. Open a new terminal after installation. Standard users can execute the
 system-installed binary and use their own configuration, but service management
 and service configuration require administrator privileges.
+.PARAMETER Command
+install (default), update or uninstall. -Update remains supported. Uninstall
+preserves configuration, caches and logs. Revert managed Docker integration as
+the Docker user first, or explicitly use -SkipDocker to leave it unchanged.
 .PARAMETER Prefix
 Dedicated application directory. Defaults to %ProgramFiles%\oci-mirror-proxy
 for service installs, or %LOCALAPPDATA%\oci-mirror-proxy with NoService. The
@@ -61,9 +65,16 @@ aborts installation; NoService never prompts, regardless of this setting.
 .PARAMETER SkipDocker
 Do not configure Docker. NoService always skips Docker. Service updates only
 maintain integration that is still managed, so a previous revert is respected.
+On uninstall, bypass the managed Docker state check and leave settings unchanged.
 .EXAMPLE
 .\install.ps1
 Install the latest release as an automatic Windows service; approve UAC if asked.
+.EXAMPLE
+.\install.ps1 update
+Update the default installation. The legacy -Update switch is also supported.
+.EXAMPLE
+.\install.ps1 uninstall
+Remove the managed service and executables, preserving configuration and logs.
 .EXAMPLE
 .\install.ps1 -Update
 Update the default installation, preserving its service configuration.
@@ -80,6 +91,9 @@ Install a selected release with dedicated custom application and data directorie
 #>
 [CmdletBinding()]
 param(
+    [Parameter(Position = 0)]
+    [ValidateSet('install', 'update', 'uninstall')]
+    [string]$Command = 'install',
     [string]$Prefix = (Join-Path $env:ProgramFiles 'oci-mirror-proxy'),
     [string]$Version = $(if ($env:VERSION) { $env:VERSION } else { 'latest' }),
     [string]$DownloadBaseUrl = $(if ($env:DOWNLOAD_BASE_URL) { $env:DOWNLOAD_BASE_URL } else { 'https://git.zmide.com/bin/oci-mirror-proxy' }),
@@ -98,11 +112,22 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Normalize the legacy switch once; all update behavior uses the same path.
+if ($Update -and $PSBoundParameters.ContainsKey('Command') -and $Command -ne 'update') { throw '-Update conflicts with the selected command.' }
+if ($Update) { $Command = 'update' }
+if ($Command -eq 'update') { $Update = $true }
+if ($Command -eq 'uninstall') {
+    foreach ($key in @('Version', 'DownloadBaseUrl', 'WinSWDownloadBaseUrl', 'Build')) {
+        if ($PSBoundParameters.ContainsKey($key)) { throw "-$key is not valid for uninstall." }
+    }
+}
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 if ($env:OS -ne 'Windows_NT') { throw 'Use install.sh on Unix systems.' }
 $repo = $DownloadBaseUrl.TrimEnd('/')
-if ($repo -notmatch '^https?://') { throw 'DownloadBaseUrl must be an HTTP or HTTPS repository root URL.' }
-if ($Version -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._+-]*$') { throw 'Invalid release tag.' }
+if ($Command -ne 'uninstall') {
+    if ($repo -notmatch '^https?://') { throw 'DownloadBaseUrl must be an HTTP or HTTPS repository root URL.' }
+    if ($Version -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._+-]*$') { throw 'Invalid release tag.' }
+}
 if ($ServiceName -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$') { throw 'Invalid service name.' }
 if ($InfoID -notmatch '^[a-f0-9]{32}$') { throw 'Invalid information handoff ID.' }
 
@@ -347,14 +372,71 @@ function Connect-UserDocker {
     } finally { Remove-Item -LiteralPath $targetFile -Force -ErrorAction SilentlyContinue }
 }
 
+function Assert-DockerUninstallSafe {
+    if ($Command -ne 'uninstall' -or $ServiceStageOnly) { return }
+    if ($SkipDocker) {
+        Write-Warning 'Docker recovery skipped; settings may still reference this proxy.'
+        return
+    }
+    # State has no installation identity. Check in the original user's process,
+    # before UAC can select a different account; never revert another proxy.
+    foreach ($state in @(
+        (Join-Path $env:APPDATA 'oci-mirror-proxy\desktop-state\dockerd-state.json'),
+        (Join-Path $env:APPDATA 'oci-mirror-proxy\engine-state\dockerd-state.json')
+    )) {
+        if (Test-Path -LiteralPath $state) {
+            throw 'Managed Docker state exists; run oci-mirror-proxy dockerd revert as the Docker user first, then retry (or explicitly use -SkipDocker).'
+        }
+    }
+}
+
+function Remove-Installation {
+    # Only enumerated managed files are removed. Private data and unrelated
+    # files survive, even when Prefix is a shared installation directory.
+    if (-not $NoService) {
+        if ($existingService) {
+            if (-not (Test-Path -LiteralPath $wrapper -PathType Leaf)) { throw 'Service wrapper is missing; manage the service manually before removing files.' }
+            Stop-ProxyService
+            Invoke-WinSW 'uninstall'
+            $removed = $false
+            for ($i = 0; $i -lt 30; $i++) {
+                if (-not (Get-CimInstance Win32_Service -Filter "Name='$ServiceName'")) { $removed = $true; break }
+                Start-Sleep -Milliseconds 500
+            }
+            if (-not $removed) { throw 'Service deletion is pending; close service management windows and retry. Files were preserved.' }
+        }
+        foreach ($path in @($wrapper, $serviceFile)) {
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+        }
+    }
+    if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Force }
+    # Historical installers did not persist PATH ownership. Leave shared or
+    # nonempty directories on PATH rather than remove access to other tools.
+    if ((Test-Path -LiteralPath $binDir) -and @(Get-ChildItem -LiteralPath $binDir -Force).Count -eq 0) {
+        $scope = if ($NoService) { 'User' } else { 'Machine' }
+        $before = Get-PersistentPath $scope
+        $entries = @($before -split ';' | Where-Object {
+            [Environment]::ExpandEnvironmentVariables($_.Trim().Trim('"')).TrimEnd('\') -ine $binDir.TrimEnd('\')
+        })
+        $after = $entries -join ';'
+        if ($after -cne $before) {
+            if ((Get-PersistentPath $scope) -cne $before) { throw 'PATH changed concurrently; files removed but PATH was preserved.' }
+            Set-PersistentPath $after $scope
+            Send-EnvironmentChange
+        }
+    } else { Write-Warning 'PATH preserved because the binary directory is nonempty or missing.' }
+    Write-Host "Uninstalled $destination. Configuration, caches and logs preserved. Docker was not restarted."
+}
+
 if ($NoService -and -not $PSBoundParameters.ContainsKey('Prefix')) {
     $Prefix = Join-Path $env:LOCALAPPDATA 'oci-mirror-proxy'
 }
 $Prefix = (Resolve-InstallPath $Prefix).TrimEnd('\')
 $binDir = Join-Path $Prefix 'bin'
-if ($NoService -and $Update -and -not $PSBoundParameters.ContainsKey('Prefix')) {
-    $existing = Get-Command oci-mirror-proxy.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
-    $binDir = Split-Path -Parent $existing.Source
+if ($NoService -and ($Update -or $Command -eq 'uninstall') -and -not $PSBoundParameters.ContainsKey('Prefix')) {
+    $existing = Get-Command oci-mirror-proxy.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existing) { $binDir = Split-Path -Parent $existing.Source }
+    elseif ($Update) { throw 'No installed binary found in PATH; specify -Prefix.' }
 }
 $destination = Join-Path $binDir 'oci-mirror-proxy.exe'
 if ((Test-Path -LiteralPath $destination) -and ((Get-Item -LiteralPath $destination).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
@@ -362,6 +444,12 @@ if ((Test-Path -LiteralPath $destination) -and ((Get-Item -LiteralPath $destinat
 }
 
 $existingService = $null
+if ($Command -eq 'uninstall') {
+    Assert-NoReparsePoint $destination
+    if ((Test-Path -LiteralPath $destination) -and -not (Test-Path -LiteralPath $destination -PathType Leaf)) { throw 'Installed binary is not a regular file.' }
+    Assert-DockerUninstallSafe
+    if ($NoService) { Remove-Installation; exit 0 }
+}
 if (-not $NoService) {
     if (-not $Config) { $Config = Join-Path (Join-Path $env:ProgramData $ServiceName) 'config.yaml' }
     $Config = Resolve-InstallPath $Config
@@ -375,9 +463,11 @@ if (-not $NoService) {
         if ($NoElevate) { throw 'Service installation requires Administrator privileges; -NoElevate disables UAC. Run as Administrator or use -NoService.' }
         $elevationParameters = @{}
         foreach ($key in $PSBoundParameters.Keys) { $elevationParameters[$key] = $PSBoundParameters[$key] }
+        $elevationParameters['Command'] = $Command
         # Freeze environment-derived defaults before a different administrator
         # account is selected. NoService never takes this branch.
         foreach ($key in @('Prefix', 'Config', 'Version', 'DownloadBaseUrl', 'WinSWDownloadBaseUrl', 'ServiceName')) {
+            if ($Command -eq 'uninstall' -and $key -in @('Version', 'DownloadBaseUrl', 'WinSWDownloadBaseUrl')) { continue }
             $elevationParameters[$key] = Get-Variable -Name $key -ValueOnly
         }
         # UAC may select another administrator. Only the original process may
@@ -392,7 +482,7 @@ if (-not $NoService) {
         }
         $code = Invoke-ElevatedInstaller $PSCommandPath $elevationParameters $goPath
         if ($code -ne 0) { Write-Host "Elevated installation failed (exit $code)." }
-        if ($code -eq 0) { Connect-UserDocker }
+        if ($code -eq 0 -and $Command -ne 'uninstall') { Connect-UserDocker }
         exit $code
     }
     # Never replace ACLs on shared system directories or a drive root.
@@ -409,6 +499,11 @@ if (-not $NoService) {
     $definition = New-ServiceDefinition
     $serviceCommand = '"' + $wrapper + '"'
     foreach ($path in @($destination, $wrapper, $serviceFile, $Config, $logDir)) { Assert-NoReparsePoint $path }
+    if ($Command -eq 'uninstall') {
+        foreach ($path in @($wrapper, $serviceFile)) {
+            if ((Test-Path -LiteralPath $path) -and -not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Expected a managed file: $path" }
+        }
+    }
     $existingService = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
     if ($existingService -and ($existingService.PathName -cne $serviceCommand -or $existingService.StartName -notin @('LocalSystem', 'NT AUTHORITY\SYSTEM'))) {
         throw "Service $ServiceName is not managed by this installation; use its original -Prefix or choose another -ServiceName."
@@ -426,6 +521,8 @@ if (-not $NoService) {
         throw 'Existing WinSW executable differs from the pinned version; refusing to overwrite it.'
     }
 }
+
+if ($Command -eq 'uninstall') { Remove-Installation; exit 0 }
 
 $nativeArch = $env:PROCESSOR_ARCHITEW6432
 if (-not $nativeArch) { $nativeArch = $env:PROCESSOR_ARCHITECTURE }

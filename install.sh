@@ -5,16 +5,21 @@ usage() {
     cat <<'EOF'
 Install or update oci-mirror-proxy from https://git.zmide.com/bin/oci-mirror-proxy.
 
-Usage: ./install.sh [--prefix DIR] [--version TAG] [--build] [--update] [--service] [--skip-docker]
+Usage: ./install.sh [install|update|uninstall] [--prefix DIR] [--version TAG] [--build] [--update] [--service] [--skip-docker]
                     [-- REMOTE_UPDATE_ARGS...]
 
 Options:
+  install        Install (default). Existing parameter-only calls remain supported.
+  update         Update; --update remains a supported alias.
+  uninstall      Remove the selected binary and its managed service; preserve data.
+                 Revert managed Docker settings manually first, or --skip-docker.
   --prefix DIR   Install into DIR/bin (default: /usr/local).
   --version TAG  Install this release tag (default: VERSION environment or latest).
   --build        Compile release source instead of downloading a binary.
   --update       Replace the binary found in PATH, unless --prefix is supplied.
   --service      Install and start a systemd/OpenRC/launchd service (requires root).
-  --skip-docker  Do not configure Docker. Binary-only installs always skip Docker.
+  --skip-docker  Skip Docker setup or the uninstall managed-state safety check.
+                 Binary-only installs always skip Docker setup.
                  Service installs apply local Docker settings without restarting
                  Docker; updates only maintain integration that is still managed.
   --             Pass remaining arguments to remote update.
@@ -111,10 +116,16 @@ sync_remote() {
     run_config "$destination" remote update --config "$sync_config" "$@"
 }
 
+action=install
+explicit_action=false
+case "${1:-}" in
+    install|update|uninstall) action=$1; explicit_action=true; shift ;;
+esac
 repo=${DOWNLOAD_BASE_URL:-https://git.zmide.com/bin/oci-mirror-proxy}
 repo=${repo%/}
-case "$repo" in
-    https://*|http://*) ;;
+case "$action:$repo" in
+    uninstall:*) ;;
+    *:https://*|*:http://*) ;;
     *) die 'DOWNLOAD_BASE_URL must be an HTTP or HTTPS repository root URL' ;;
 esac
 prefix=/usr/local
@@ -122,11 +133,13 @@ explicit_prefix=false
 version=${VERSION:-latest}
 build=false
 update=false
+[ "$action" != update ] || update=true
 service=false
 skip_docker=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --prefix|--version)
+            [ "$action" != uninstall ] || [ "$1" != --version ] || die '--version is not valid for uninstall'
             [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 requires a value"
             case "$1" in
                 --prefix) prefix=$2; explicit_prefix=true ;;
@@ -134,11 +147,13 @@ while [ "$#" -gt 0 ]; do
             esac
             shift 2
             ;;
-        --build) build=true; shift ;;
-        --update) update=true; shift ;;
+        --build) [ "$action" != uninstall ] || die '--build is not valid for uninstall'; build=true; shift ;;
+        --update)
+            [ "$explicit_action" = false ] || [ "$action" = update ] || die '--update conflicts with the selected command'
+            action=update; update=true; shift ;;
         --service) service=true; shift ;;
         --skip-docker) skip_docker=true; shift ;;
-        --) shift; break ;;
+        --) [ "$action" != uninstall ] || die 'uninstall does not accept remote update arguments'; shift; break ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -153,12 +168,21 @@ validate_version() {
         ''|[!a-zA-Z0-9]*|*[!a-zA-Z0-9._+-]*) die 'invalid release tag' ;;
     esac
 }
-validate_version
-for tool in curl tar install mktemp; do
+if [ "$action" != uninstall ]; then validate_version; fi
+tools='mktemp'
+if [ "$action" != uninstall ]; then tools='curl tar install mktemp'; fi
+for tool in $tools; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
 done
 
 bin_dir=${prefix%/}/bin
+if [ "$action" = uninstall ] && [ "$explicit_prefix" = false ]; then
+    existing=$(command -v oci-mirror-proxy || true)
+    if [ -n "$existing" ]; then
+        case "$existing" in /*) ;; *) existing="$PWD/$existing" ;; esac
+        bin_dir=$(CDPATH= cd -- "$(dirname -- "$existing")" && pwd)
+    fi
+fi
 if [ "$update" = true ] && [ "$explicit_prefix" = false ]; then
     existing=$(command -v oci-mirror-proxy) || die 'no installed binary found in PATH; specify --prefix or install without --update'
     case "$existing" in
@@ -175,6 +199,36 @@ config_user=
 config_home=
 sync_skip=
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
+# Detect definitions even when their manager is not running. Never delete a
+# binary while leaving an undiscovered service pointing at it.
+    if [ "$action" = uninstall ]; then
+    detected_binary=
+    for candidate in /etc/systemd/system/oci-mirror-proxy.service /etc/init.d/oci-mirror-proxy /Library/LaunchDaemons/com.runui.oci-mirror-proxy.plist; do
+        if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+            [ ! -L "$candidate" ] || die "refusing service symlink $candidate"
+            [ -z "$detected_binary" ] || die 'multiple service definitions found; manage them manually'
+            case "$candidate" in
+                *.service) detected_binary=$(sed -n 's/^ExecStart=\([^ ]*\) serve .*/\1/p' "$candidate") ;;
+                *.plist) detected_binary=$(sed -n 's|^<string>\([^<]*\)</string><string>serve</string>$|\1|p' "$candidate") ;;
+                *) detected_binary=$(sed -n 's/^command="\([^"]*\)"$/\1/p' "$candidate") ;;
+            esac
+            [ -n "$detected_binary" ] || die "cannot identify managed binary from $candidate"
+            case "$detected_binary" in /*/oci-mirror-proxy) ;; *) die 'invalid service executable path' ;; esac
+            if [ "$explicit_prefix" = false ]; then
+                if [ -n "${existing:-}" ] && [ "$destination" != "$detected_binary" ]; then
+                    die 'PATH and service select different installations; specify --prefix'
+                fi
+                destination=$detected_binary
+                bin_dir=${destination%/*}
+            fi
+            service=true
+        fi
+    done
+    # Binary-only installs can still have manually enrolled system Docker.
+    if [ "$os" = linux ] && [ "$skip_docker" = false ] && [ -e /var/lib/oci-mirror-proxy/dockerd-state.json ]; then
+        die 'system Docker integration is managed; revert it manually first or use --skip-docker'
+    fi
+fi
 # A privileged binary install must not create private root-owned files in the
 # invoking user's home. Resolve the account rather than trusting inherited HOME.
 if [ "$service" = false ] && [ "$(id -u)" -eq 0 ]; then
@@ -218,6 +272,7 @@ if [ "$service" = true ]; then
         manager=openrc
         service_file=/etc/init.d/oci-mirror-proxy
     else
+        [ "$action" != uninstall ] || die 'service definition exists but its service manager is unavailable; manage it manually'
         printf 'Warning: no running systemd or OpenRC detected; installing binary only.\n' >&2
         sync_skip='No service manager detected; run remote update as the intended user.'
     fi
@@ -377,6 +432,61 @@ if [ -n "$manager" ]; then
         cmp -s "$build_dir/legacy-service" "$service_file" ||
             die "$service_file differs from the generated definition; manage this service manually (omit --service)"
     fi
+fi
+
+if [ "$action" = uninstall ]; then
+    # Preflight before touching the service. Configuration
+    # and logs are deliberately outside the uninstall deletion set.
+    target=$destination
+    while [ "$target" != / ]; do
+        # macOS ships /var as a root-owned alias for /private/var.
+        if [ "$os" = darwin ] && [ "$target" = /var ] && [ "$(readlink /var)" = private/var ]; then break; fi
+        [ ! -L "$target" ] || die "refusing symlink $target"
+        target=$(dirname -- "$target")
+    done
+    [ ! -e "$destination" ] || [ -f "$destination" ] || die 'installed binary is not a regular file'
+    config=/etc/oci-mirror-proxy/config.yaml
+    if [ "$skip_docker" = false ]; then
+        state=
+        if [ "$service" = false ]; then
+            case "$os" in
+                darwin) state="$HOME/Library/Application Support/oci-mirror-proxy/desktop-state/dockerd-state.json" ;;
+                linux) state="${XDG_STATE_HOME:-$HOME/.local/state}/oci-mirror-proxy/dockerd-state.json" ;;
+            esac
+        else
+            [ -z "$docker_identity_error" ] || die "$docker_identity_error; restore Docker manually or use --skip-docker"
+            if [ "$os" = darwin ]; then
+                state="$docker_home/Library/Application Support/oci-mirror-proxy/desktop-state/dockerd-state.json"
+            else
+                state=/var/lib/oci-mirror-proxy/dockerd-state.json
+            fi
+        fi
+        if [ -e "$state" ] || [ -L "$state" ]; then
+            # Existing state identifies files, not the proxy installation. Never
+            # revert another instance merely because its state directory exists.
+            die 'managed Docker state exists; run oci-mirror-proxy dockerd revert as the Docker user first, then retry (or explicitly use --skip-docker)'
+        fi
+    elif [ "$skip_docker" = true ]; then
+        printf 'Warning: Docker recovery skipped; settings may still reference this proxy.\n' >&2
+    fi
+    case "$manager" in
+        systemd)
+            systemctl stop oci-mirror-proxy.service
+            systemctl disable oci-mirror-proxy.service
+            rm -f "$service_file"
+            systemctl daemon-reload ;;
+        openrc)
+            if rc-service oci-mirror-proxy status >/dev/null 2>&1; then rc-service oci-mirror-proxy stop; fi
+            rc-update del oci-mirror-proxy default
+            rm -f "$service_file" ;;
+        launchd)
+            if launchctl print "system/$service_label" >/dev/null 2>&1; then launchctl bootout "system/$service_label"; fi
+            launchctl enable "system/$service_label"
+            rm -f "$service_file" ;;
+    esac
+    rm -f "$destination"
+    printf 'Uninstalled %s. Configuration, caches and logs preserved. Docker was not restarted.\n' "$destination"
+    exit 0
 fi
 
 if [ "$version" = latest ]; then

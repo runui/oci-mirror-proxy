@@ -60,7 +60,7 @@ oci-mirror-proxy version
 Update an existing installation:
 
 ```sh
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --update --prefix "$HOME/.local"
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- update --prefix "$HOME/.local"
 ```
 
 On Linux, install and start a system service with root privileges:
@@ -68,7 +68,7 @@ On Linux, install and start a system service with root privileges:
 ```sh
 curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --service
 # Update the system installation and restart its service:
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --update --prefix /usr/local --service
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- update --prefix /usr/local --service
 ```
 
 The script downloads the matching Linux, macOS, or FreeBSD binary and verifies
@@ -105,7 +105,7 @@ PowerShell. Approve the Windows administrator prompt when requested:
 Invoke-WebRequest https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.ps1 -OutFile install.ps1
 .\install.ps1 -DownloadBaseUrl https://github.com/runui/oci-mirror-proxy
 # Update the installation and restart its service:
-.\install.ps1 -DownloadBaseUrl https://github.com/runui/oci-mirror-proxy -Update
+.\install.ps1 update -DownloadBaseUrl https://github.com/runui/oci-mirror-proxy
 ```
 
 The installer starts the proxy as a Windows service, enables startup at boot,
@@ -119,6 +119,29 @@ The `--service` option supports Linux systemd/OpenRC and macOS launchd system
 services. Sudo installs without `--service` initialize user configuration as the
 verified invoking user. See [macOS installation and permissions](docs/macos-installation.md)
 for service management and recovery from older root-owned user configurations.
+
+### Update and uninstall
+
+<!-- Keep documentation user-facing and concise. Leave parameter details to
+script help; omit compatibility notes and implementation or testing narratives. -->
+
+```sh
+sh install.sh update --prefix "$HOME/.local"
+sudo sh install.sh update --prefix /usr/local --service
+sh install.sh uninstall --prefix "$HOME/.local"
+sudo sh install.sh uninstall --prefix /usr/local
+```
+
+```powershell
+.\install.ps1 update
+.\install.ps1 uninstall
+```
+
+Uninstall preserves configuration, caches and logs. If Docker integration is
+enabled, run `oci-mirror-proxy dockerd revert` as the Docker user first (with sudo
+for system Docker). Docker is not restarted automatically.
+
+For options, run `sh install.sh --help` or `Get-Help .\install.ps1 -Full`.
 
 ## Docker deployment
 

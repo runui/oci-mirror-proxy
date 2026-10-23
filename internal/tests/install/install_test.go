@@ -1,9 +1,16 @@
-package cli
+// Keep installer tests together in this package. Extend the existing platform
+// suites instead of adding a test file for each command, feature or scenario.
+package install
 
 import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"fmt"
+	"github.com/runui/oci-mirror-proxy/internal/config"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,15 +18,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/runui/oci-mirror-proxy/internal/config"
 )
 
 func TestInstallerSyncsOfficialRemote(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("installer requires a Unix environment")
 	}
-	script, err := os.ReadFile(filepath.Join("..", "..", "install.sh"))
+	script, err := os.ReadFile(filepath.Join("..", "..", "..", "install.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,5 +444,177 @@ esac
 				}
 			}
 		})
+	}
+}
+
+func TestInstallerReleasePlatforms(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("installer requires a Unix environment")
+	}
+	for _, tc := range []struct {
+		os, machine, platform, member string
+		badChecksum                   bool
+	}{
+		{"Linux", "x86_64", "linux_amd64", "./oci-mirror-proxy", false},
+		{"Linux", "aarch64", "linux_arm64", "oci-mirror-proxy", false},
+		{"Linux", "armv7l", "linux_armv7", "oci-mirror-proxy", false},
+		{"Linux", "riscv64", "linux_riscv64", "oci-mirror-proxy", false},
+		{"Darwin", "x86_64", "darwin_amd64", "oci-mirror-proxy", false},
+		{"Darwin", "arm64", "darwin_arm64", "oci-mirror-proxy", false},
+		{"FreeBSD", "amd64", "freebsd_amd64", "oci-mirror-proxy", false},
+		{"FreeBSD", "arm64", "freebsd_arm64", "oci-mirror-proxy", false},
+		{"Darwin", "arm64", "darwin_arm64", "oci-mirror-proxy", true},
+	} {
+		t.Run(fmt.Sprintf("%s/corrupt=%t", tc.platform, tc.badChecksum), func(t *testing.T) {
+			root := t.TempDir()
+			tools := filepath.Join(root, "tools")
+			if err := os.Mkdir(tools, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			uname := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in -s) echo %s ;; -m) echo %s ;; esac\n", tc.os, tc.machine)
+			if err := os.WriteFile(filepath.Join(tools, "uname"), []byte(uname), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			binary := []byte("#!/bin/sh\nexit 0\n")
+			var archive bytes.Buffer
+			gz := gzip.NewWriter(&archive)
+			tw := tar.NewWriter(gz)
+			if err := tw.WriteHeader(&tar.Header{Name: tc.member, Mode: 0o755, Size: int64(len(binary))}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tw.Write(binary); err != nil {
+				t.Fatal(err)
+			}
+			if err := tw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := gz.Close(); err != nil {
+				t.Fatal(err)
+			}
+			asset := "oci-mirror-proxy_v1.2.3_" + tc.platform + ".tar.gz"
+			sum := fmt.Sprintf("%x", sha256.Sum256(archive.Bytes()))
+			if tc.badChecksum {
+				sum = strings.Repeat("0", 64)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/releases/download/v1.2.3/" + asset:
+					_, _ = w.Write(archive.Bytes())
+				case "/releases/download/v1.2.3/SHA256SUMS":
+					_, _ = fmt.Fprintf(w, "%s  %s\n", sum, asset)
+				default:
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			prefix := filepath.Join(root, "prefix")
+			// Exercise the explicit and legacy entry points against real archives.
+			entry := []string{"install"}
+			switch tc.machine {
+			case "aarch64", "arm64":
+				entry = []string{"update"}
+			case "armv7l":
+				entry = []string{"--update"}
+			case "riscv64":
+				entry = nil
+			}
+			args := append([]string{"../../../install.sh"}, entry...)
+			args = append(args, "--version", "v1.2.3", "--prefix", prefix)
+			cmd := exec.CommandContext(t.Context(), "sh", args...)
+			cmd.Env = append(os.Environ(), "PATH="+tools+":"+os.Getenv("PATH"), "DOWNLOAD_BASE_URL="+server.URL, "HOME="+root, "XDG_CONFIG_HOME="+root, "TMPDIR="+root)
+			out, err := cmd.CombinedOutput()
+			installed, readErr := os.ReadFile(filepath.Join(prefix, "bin", "oci-mirror-proxy"))
+			if tc.badChecksum {
+				if err == nil || !bytes.Contains(out, []byte("SHA256 verification failed")) || !os.IsNotExist(readErr) {
+					t.Fatalf("corrupt archive accepted: %v, %v\n%s", err, readErr, out)
+				}
+				return
+			}
+			if err != nil || readErr != nil || !bytes.Equal(installed, binary) {
+				t.Fatalf("install failed: %v, %v\n%s", err, readErr, out)
+			}
+		})
+	}
+}
+
+func TestInstallerCommands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX shell")
+	}
+	for _, args := range [][]string{
+		{"install", "--update"}, {"uninstall", "--update"},
+		{"uninstall", "--build"}, {"uninstall", "--version", "v1"},
+		{"uninstall", "--", "--config", "other"}, {"update", "uninstall"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), "sh", append([]string{"../../../install.sh"}, args...)...)
+			if out, err := cmd.CombinedOutput(); err == nil {
+				t.Fatalf("accepted invalid arguments: %s", out)
+			}
+		})
+	}
+	for _, action := range []string{"install", "update", "uninstall"} {
+		cmd := exec.CommandContext(t.Context(), "sh", "../../../install.sh", action, "--help")
+		if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "uninstall") {
+			t.Fatalf("help failed: %v: %s", err, out)
+		}
+	}
+}
+
+func TestInstallerUninstallPreservesData(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX shell")
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(bin, "oci-mirror-proxy")
+	for _, path := range []string{destination, filepath.Join(bin, "other-tool"), filepath.Join(root, "config.yaml")} {
+		if err := os.WriteFile(path, []byte("preserve"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// No valid release URL or version is needed for offline removal.
+	for range 2 {
+		cmd := exec.CommandContext(t.Context(), "sh", "../../../install.sh", "uninstall", "--prefix", root, "--skip-docker")
+		cmd.Env = append(os.Environ(), "DOWNLOAD_BASE_URL=invalid", "VERSION=invalid/tag")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("uninstall: %v: %s", err, out)
+		}
+	}
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("binary remains: %v", err)
+	}
+	for _, path := range []string{filepath.Join(bin, "other-tool"), filepath.Join(root, "config.yaml")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestInstallerUninstallRefusesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX shell")
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "keep")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(bin, "oci-mirror-proxy")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), "sh", "../../../install.sh", "uninstall", "--prefix", root, "--skip-docker")
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "symlink") {
+		t.Fatalf("symlink accepted: %v: %s", err, out)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "keep" {
+		t.Fatalf("target changed: %v", err)
 	}
 }

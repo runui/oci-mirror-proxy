@@ -1,4 +1,6 @@
-package cli
+// Keep installer tests together in this package. Extend the existing platform
+// suites instead of adding a test file for each command, feature or scenario.
+package install
 
 import (
 	"archive/zip"
@@ -39,7 +41,7 @@ func isolateWindowsInstallerPaths(script string) string {
 
 func isolatedWindowsInstaller(t *testing.T, root string) string {
 	t.Helper()
-	source, err := os.ReadFile(filepath.Join("..", "..", "install.ps1"))
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "install.ps1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +111,7 @@ func TestWindowsInstaller(t *testing.T) {
 				http.NotFound(w, r)
 			}))
 			defer server.Close()
-			root := t.TempDir()
+			root := windowsInstallerTempDir(t)
 			prefix := filepath.Join(root, "prefix with spaces")
 			tmp := filepath.Join(root, "tmp")
 			if err := os.Mkdir(tmp, 0o700); err != nil {
@@ -263,7 +265,7 @@ func main() { fmt.Println(cli.Version()) }
 				}
 			}))
 			defer server.Close()
-			work := t.TempDir()
+			work := windowsInstallerTempDir(t)
 			prefix := filepath.Join(work, "prefix with spaces & unicode 中文")
 			localSource := filepath.Join(work, "local source with spaces & unicode 中文")
 			localFiles := map[string]string{
@@ -398,12 +400,12 @@ func TestWindowsInstallerBuildElevationDirectory(t *testing.T) {
 			continue
 		}
 		t.Run(shell, func(t *testing.T) {
-			work := t.TempDir()
+			work := windowsInstallerTempDir(t)
 			source := filepath.Join(work, "source with spaces & unicode 中文")
 			if err := os.Mkdir(source, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			script, err := filepath.Abs(filepath.Join("..", "..", "install.ps1"))
+			script, err := filepath.Abs(filepath.Join("..", "..", "..", "install.ps1"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -450,7 +452,7 @@ if ($code -ne 0) { throw "Elevated build failed: $code" }
 // Match the Unix installer fixtures: substitute the platform service manager,
 // never register a host service or modify host directory permissions.
 func TestWindowsInstallerService(t *testing.T) {
-	root := t.TempDir()
+	root := windowsInstallerTempDir(t)
 	source := filepath.Join(root, "fixture.go")
 	if err := os.WriteFile(source, []byte(`package main
 import ("os"; "strings"; "fmt")
@@ -528,7 +530,7 @@ func main() {
 		}
 	}))
 	defer server.Close()
-	original, err := os.ReadFile(filepath.Join("..", "..", "install.ps1"))
+	original, err := os.ReadFile(filepath.Join("..", "..", "..", "install.ps1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +542,7 @@ func main() {
 		for _, testCase := range []string{"install", "update", "failed install", "failed update", "custom definition", "custom account", "bad wrapper", "build install", "build update", "build failed update"} {
 			t.Run(shell+"/"+testCase, func(t *testing.T) {
 				scenario := strings.TrimPrefix(testCase, "build ")
-				work := t.TempDir()
+				work := windowsInstallerTempDir(t)
 				prefix := filepath.Join(work, "prefix with spaces & unicode 中文")
 				config := filepath.Join(work, "config with spaces", "config.yaml")
 				script := isolateWindowsInstallerPaths(string(original))
@@ -690,5 +692,281 @@ if ($global:fixtureStatus -ne 'Running') { throw 'Previous service was not resto
 				}
 			})
 		}
+	}
+}
+
+func windowsInstallerTempDir(t *testing.T) string {
+	t.Helper()
+	// Go may return an 8.3 TEMP path while PowerShell expands it to long names.
+	// Share one representation across environment variables and assertions.
+	path, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestWindowsInstallerElevation(t *testing.T) {
+	original, err := os.ReadFile(filepath.Join("..", "..", "..", "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, shell := range []string{"powershell.exe", "pwsh.exe"} {
+		binary, err := exec.LookPath(shell)
+		if err != nil {
+			continue
+		}
+		for _, scenario := range []string{"success", "child failure", "not elevated", "cancel", "launch failure", "no elevate", "no service", "administrator", "build", "switch false"} {
+			t.Run(shell+"/"+scenario, func(t *testing.T) {
+				root := windowsInstallerTempDir(t)
+				installer := filepath.Join(root, "installer with spaces.ps1")
+				script := regexp.MustCompile(`(?ms)^function Test-IsAdministrator \{.*?^}`).ReplaceAllString(string(original), `function Test-IsAdministrator { return ($$env:TEST_SCENARIO -eq 'administrator') }`)
+				// Stop before querying SCM, downloading or changing any host files.
+				script = strings.Replace(script, "$existingService = Get-CimInstance", "throw 'REACHED_INSTALLATION'; $existingService = Get-CimInstance", 1)
+				script = strings.Replace(script, "$nativeArch = $env:PROCESSOR_ARCHITEW6432", "throw 'REACHED_INSTALLATION'; $nativeArch = $env:PROCESSOR_ARCHITEW6432", 1)
+				if err := os.WriteFile(installer, []byte(script), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runner := `
+$ErrorActionPreference = 'Stop'
+function Start-Process {
+ param($FilePath,$Verb,$ArgumentList,$WorkingDirectory,[switch]$Wait,[switch]$PassThru,$ErrorAction)
+ if ($Verb -ne 'RunAs' -or -not $Wait -or -not $PassThru -or -not [IO.File]::Exists($FilePath)) { throw 'Incorrect elevation invocation' }
+ if ($ArgumentList -contains '-ExecutionPolicy') { throw 'Execution policy was bypassed' }
+ if ($env:TEST_SCENARIO -eq 'cancel') { throw (New-Object ComponentModel.Win32Exception(1223)) }
+ if ($env:TEST_SCENARIO -eq 'launch failure') { throw (New-Object ComponentModel.Win32Exception(2)) }
+ $encoded = $ArgumentList[-1]
+ $bootstrap = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
+ $tokens=$null; $errors=$null
+ [Management.Automation.Language.Parser]::ParseInput($bootstrap,[ref]$tokens,[ref]$errors) > $null
+ if ($errors.Count) { throw 'Invalid bootstrap' }
+ if ($bootstrap -notmatch "FromBase64String\('([A-Za-z0-9+/=]+)'\)") { throw 'Missing structured payload' }
+ $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1])) | ConvertFrom-Json
+ if ($payload.Script -cne $env:TEST_INSTALLER) { throw 'Script path changed' }
+ $p = $payload.Parameters
+ if ($p.Prefix -cne $env:TEST_PREFIX -or $p.Config -cne $env:TEST_CONFIG -or $p.Version -cne 'vtest' -or $p.DownloadBaseUrl -cne $env:DOWNLOAD_BASE_URL -or -not $p.NoElevate) { throw 'Parameters changed' }
+ if ($p.Update -ne $true -or $p.NoService -ne $false) { throw 'Switch values changed' }
+ if ($env:TEST_SCENARIO -eq 'build') {
+  if (-not $p.Build -or $payload.GoPath -cne (Get-Command go -CommandType Application).Source) { throw 'Build context lost' }
+ } elseif ($null -ne $p.Build -and $p.Build -ne $false) { throw 'Build unexpectedly enabled' }
+ # Execute the actual generated bootstrap with a harmless parameter-capture
+ # script. Only substitute its privilege check; never trigger real UAC.
+ $capture = Join-Path $env:TEMP 'capture.ps1'
+ [IO.File]::WriteAllText($capture, 'param($Prefix,$Config,$Version,$DownloadBaseUrl,$WinSWDownloadBaseUrl,$ServiceName,[switch]$Update,[switch]$NoService,[switch]$Build,[switch]$NoElevate); if ($Prefix -cne $env:TEST_PREFIX -or $DownloadBaseUrl -cne $env:DOWNLOAD_BASE_URL -or -not $Update -or $NoService) { throw "Capture mismatch" }; if ($env:TEST_SCENARIO -eq "child failure") { throw "child failed" }')
+ $payload.Script = $capture
+ $data = $payload | ConvertTo-Json -Compress -Depth 5
+ $replacement = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($data))
+ $bootstrap = $bootstrap.Replace($Matches[1], $replacement)
+ $condition = if ($env:TEST_SCENARIO -eq 'not elevated') { 'if ($true)' } else { 'if ($false)' }
+ $bootstrap = $bootstrap.Replace('if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))', $condition)
+ $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+ & $FilePath -NoLogo -NoProfile -EncodedCommand $encoded
+ $result = [pscustomobject]@{ ExitCode=$LASTEXITCODE }
+ $result | Add-Member ScriptMethod Dispose {}
+ return $result
+}
+$params = @{ Prefix=$env:TEST_PREFIX; Config=$env:TEST_CONFIG; Update=$true; NoService=$false }
+switch ($env:TEST_SCENARIO) {
+ 'no elevate' { $params.NoElevate=$true }
+ 'no service' { $params.NoService=$true }
+ 'build' { $params.Build=$true }
+ 'switch false' { $params.Build=$false; $params.NoElevate=$false }
+}
+try { & $env:TEST_INSTALLER @params; exit $LASTEXITCODE } catch {
+ $expected = switch ($env:TEST_SCENARIO) {
+  'cancel' { 'approval was canceled' }
+  'launch failure' { 'specified' }
+  'no elevate' { '-NoElevate disables UAC' }
+  'no service' { 'REACHED_INSTALLATION' }
+  'administrator' { 'REACHED_INSTALLATION' }
+  default { throw }
+ }
+ if ($env:TEST_SCENARIO -ne 'launch failure' -and $_.ToString() -notlike "*$expected*") { throw }
+ Write-Output 'EXPECTED_FAILURE'
+ exit 0
+}
+`
+				path := filepath.Join(root, "run.ps1")
+				if err := os.WriteFile(path, []byte(runner), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cmd := exec.CommandContext(t.Context(), binary, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
+				for _, env := range os.Environ() {
+					if !strings.HasPrefix(strings.ToUpper(env), "PSMODULEPATH=") {
+						cmd.Env = append(cmd.Env, env)
+					}
+				}
+				cmd.Env = append(cmd.Env, "TEST_SCENARIO="+scenario, "TEST_INSTALLER="+installer, "TEST_PREFIX="+filepath.Join(root, "prefix with spaces & 中文's"), "TEST_CONFIG="+filepath.Join(root, "config 中文's", "config.yaml"), "VERSION=vtest", "DOWNLOAD_BASE_URL=https://example.invalid/a?x='quote'&y=$notcode", "TEMP="+root, "TMP="+root)
+				out, err := cmd.CombinedOutput()
+				if scenario == "child failure" || scenario == "not elevated" {
+					if err == nil || !strings.Contains(string(out), "Elevated installation failed") {
+						t.Fatalf("child failure not propagated: %v\n%s", err, out)
+					}
+				} else if err != nil {
+					t.Fatalf("elevation: %v\n%s", err, out)
+				}
+				if _, err := os.Stat(filepath.Join(root, "prefix with spaces & 中文's")); !os.IsNotExist(err) {
+					t.Fatal("parent modified installation before approval")
+				}
+			})
+		}
+	}
+}
+
+func TestWindowsInstallerPermissionRules(t *testing.T) {
+	for _, shell := range []string{"powershell.exe", "pwsh.exe"} {
+		binary, err := exec.LookPath(shell)
+		if err != nil {
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			script, err := filepath.Abs(filepath.Join("..", "..", "..", "install.ps1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := fmt.Sprintf(`$ErrorActionPreference='Stop'
+$ast=[Management.Automation.Language.Parser]::ParseFile('%s',[ref]$null,[ref]$null)
+$fn=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Protect-ServicePath'},$true)
+. ([scriptblock]::Create($fn.Extent.Text))
+function Set-Acl { param($LiteralPath,$AclObject) $script:acl=$AclObject }
+Protect-ServicePath 'fixture' -Directory -ReadUsers
+$sddl=$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
+if ($sddl -notlike '*;;;BU)*' -or $sddl -like '*FA;;;BU)*' -or $sddl -notlike 'D:P*') { throw "Wrong executable directory permissions: $sddl" }
+Protect-ServicePath 'fixture' -ReadUsers
+$sddl=$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
+if ($sddl -notlike '*;;;BU)*' -or $sddl -like '*FA;;;BU)*') { throw "Wrong executable permissions: $sddl" }
+Protect-ServicePath 'fixture'
+$sddl=$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
+if ($sddl -like '*;;;BU)*' -or $sddl -notlike '*FA;;;SY)*' -or $sddl -notlike '*FA;;;BA)*') { throw "Wrong service configuration permissions: $sddl" }
+`, strings.ReplaceAll(script, "'", "''"))
+			cmd := exec.CommandContext(t.Context(), binary, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command)
+			for _, env := range os.Environ() {
+				if !strings.HasPrefix(strings.ToUpper(env), "PSMODULEPATH=") {
+					cmd.Env = append(cmd.Env, env)
+				}
+			}
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("permissions: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestWindowsInstallerPath(t *testing.T) {
+	for _, shell := range []string{"powershell.exe", "pwsh.exe"} {
+		binary, err := exec.LookPath(shell)
+		if err != nil {
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			root := t.TempDir()
+			installer, err := filepath.Abs(filepath.Join("..", "..", "..", "install.ps1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner := `
+$ErrorActionPreference='Stop'
+$help=Get-Help $env:TEST_INSTALLER -Full
+foreach ($name in @('Prefix','Version','DownloadBaseUrl','Update','Config','ServiceName','NoService','WinSWDownloadBaseUrl','Build','NoElevate')) {
+    $parameter=$help.parameters.parameter | Where-Object name -eq $name
+    if (-not $parameter.description.Text) { throw "Missing installer help: $name" }
+}
+$ast=[Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER,[ref]$null,[ref]$null)
+foreach ($name in @('Add-BinaryPath','Restore-BinaryPath','Resolve-InstallPath')) {
+    $fn=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+try { Resolve-InstallPath 'C:\unsafe;C:\injected'; throw 'Semicolon accepted' } catch { if ($_ -notlike '*Expected an absolute local path*') { throw } }
+function Get-PersistentPath($Target) { $script:lastTarget=$Target; return $script:persisted }
+function Set-PersistentPath($Value,$Target) {
+    if ($script:failWrite) { throw 'write denied' }
+    $script:lastTarget=$Target; $script:persisted=$Value; $script:writes++
+}
+function Send-EnvironmentChange { $script:notifications++ }
+$binDir='C:\Program Files\oci-mirror-proxy\bin'
+foreach ($NoService in @($true,$false)) {
+    $expectedTarget=if($NoService){'User'}else{'Machine'}
+    foreach ($before in @($null,'','C:\first','C:\first;','%SystemRoot%\System32;C:\other')) {
+        $script:persisted=$before; $script:pathChanged=$false; $script:writes=0; $script:notifications=0
+        Add-BinaryPath
+        $separator=if($before -and -not $before.EndsWith(';')){';'}else{''}
+        if ($persisted -cne ($before+$separator+$binDir) -or $lastTarget -ne $expectedTarget -or $writes -ne 1 -or $notifications -ne 1) { throw 'PATH addition mismatch' }
+        Add-BinaryPath
+        if ($writes -ne 1) { throw 'Repeated installation duplicated PATH' }
+        # A real second installation has its own state. Restore this attempt.
+        $script:previousPath=$before
+        Restore-BinaryPath
+        if ($persisted -cne $before -or $notifications -ne 2) { throw 'PATH rollback mismatch' }
+    }
+    foreach ($existing in @('"C:\PROGRAM FILES\oci-mirror-proxy\bin\"','%ProgramFiles%\oci-mirror-proxy\bin',' C:\Program Files\oci-mirror-proxy\bin ')) {
+        $script:persisted='C:\first;'+$existing+';C:\last'; $script:pathChanged=$false; $script:writes=0
+        Add-BinaryPath
+        if ($writes -ne 0 -or $pathChanged) { throw 'Equivalent PATH was duplicated' }
+    }
+    $script:persisted='C:\first'; $script:pathChanged=$false; $script:writes=0
+    Add-BinaryPath
+    $script:persisted+=';C:\concurrent'
+    $concurrent=$persisted
+    Restore-BinaryPath
+    if ($persisted -cne $concurrent -or $writes -ne 1) { throw 'Rollback overwrote concurrent PATH edit' }
+    $script:persisted='C:\first'; $script:pathChanged=$false; $script:failWrite=$true
+    try { Add-BinaryPath; throw 'Expected write failure' } catch { if ($_ -notlike '*write denied*') { throw } }
+    if ($pathChanged) { throw 'Failed write marked as successful' }
+    $script:failWrite=$false
+}
+`
+			path := filepath.Join(root, "run.ps1")
+			if err := os.WriteFile(path, []byte(runner), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), binary, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", path)
+			for _, env := range os.Environ() {
+				if !strings.HasPrefix(strings.ToUpper(env), "PSMODULEPATH=") {
+					cmd.Env = append(cmd.Env, env)
+				}
+			}
+			cmd.Env = append(cmd.Env, "TEST_INSTALLER="+installer, "TEMP="+root, "TMP="+root)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("PATH behavior: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestWindowsInstallerUninstallCommand(t *testing.T) {
+	for _, shell := range []string{"powershell.exe", "pwsh.exe"} {
+		binary, err := exec.LookPath(shell)
+		if err != nil {
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			root := t.TempDir()
+			script := isolatedWindowsInstaller(t, root)
+			prefix := filepath.Join(root, "application")
+			bin := filepath.Join(prefix, "bin")
+			if err := os.MkdirAll(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			destination := filepath.Join(bin, "oci-mirror-proxy.exe")
+			config := filepath.Join(prefix, "config.yaml")
+			for _, path := range []string{destination, config} {
+				if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 2 {
+				cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "uninstall", "-NoService", "-Prefix", prefix, "-SkipDocker")
+				cmd.Env = append(os.Environ(), "DOWNLOAD_BASE_URL=invalid", "VERSION=invalid/tag")
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("uninstall: %v: %s", err, out)
+				}
+			}
+			if _, err := os.Stat(destination); !os.IsNotExist(err) {
+				t.Fatalf("binary remains: %v", err)
+			}
+			if _, err := os.Stat(config); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

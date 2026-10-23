@@ -1,4 +1,6 @@
 #Requires -Version 5.1
+# Keep installation checks in this directory; extend these platform suites
+# rather than adding separate scripts for individual features or scenarios.
 # Run installed-binary checks under a real standard account, not an admin token.
 param(
     [Parameter(Mandatory=$true)][string]$Binary,

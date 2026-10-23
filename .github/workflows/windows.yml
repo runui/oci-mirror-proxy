@@ -27,7 +27,7 @@ jobs:
         run: go test -race -count=1 -timeout 5m ./...
       - name: Windows service installation, update and rollback
         shell: pwsh
-        run: ./scripts/test-windows-service.ps1
+        run: ./internal/tests/install/test-windows-service.ps1
       - name: Build amd64 and arm64
         shell: pwsh
         run: |

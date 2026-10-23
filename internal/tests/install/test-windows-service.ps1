@@ -1,7 +1,9 @@
 #Requires -Version 5.1
+# Keep installation checks in this directory; extend these platform suites
+# rather than adding separate scripts for individual features or scenarios.
 # Isolated SCM integration check for elevated Windows CI runners.
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 $id = 'oci-mirror-proxy-test-' + [Guid]::NewGuid().ToString('N')
 $root = Join-Path $env:ProgramFiles $id
 $data = Join-Path $env:ProgramData $id

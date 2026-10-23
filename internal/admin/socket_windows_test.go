@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -57,9 +58,26 @@ func TestWindowsPipeLongPathAndPrivateDACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sddl := sd.String()
-	if !strings.Contains(sddl, "D:P") || (!strings.Contains(sddl, "(A;;GA;;;"+user.User.Sid.String()+")") && !strings.Contains(sddl, "(A;;FA;;;"+user.User.Sid.String()+")")) || strings.Count(sddl, "(A;") != 1 {
-		t.Fatalf("pipe must only grant the current user access: %s", sddl)
+	control, _, err := sd.Control()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 || dacl == nil || dacl.AceCount != 1 {
+		t.Fatalf("pipe must have a protected DACL with one ACE: %s", sd.String())
+	}
+	var ace *windows.ACCESS_ALLOWED_ACE
+	if err := windows.GetAce(dacl, 0, &ace); err != nil {
+		t.Fatal(err)
+	}
+	// SDDL can abbreviate the current user's SID (for example, as LA).
+	sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+	const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1ff
+	if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != 0 || !sid.Equals(user.User.Sid) || (ace.Mask != windows.GENERIC_ALL && ace.Mask != fileAllAccess) {
+		t.Fatalf("pipe must only grant the current user full access: %s", sd.String())
 	}
 }
 
