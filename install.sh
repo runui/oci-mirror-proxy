@@ -572,10 +572,10 @@ if [ -n "$manager" ]; then
     if ! run_system test -e "$config" && ! run_system test -L "$config"; then
         run_system install -d -m 700 /etc/oci-mirror-proxy
         if [ "$manager" = launchd ]; then
-            # Desktop's Engine runs in a VM: its loopback is not the Mac host.
+            # Desktop forwards host.docker.internal to the Mac's loopback.
             init_config "$config" --admin-socket /var/run/oci-mirror-proxy/admin.sock \
-                --listen 0.0.0.0:24817 --advertise host.docker.internal:24817
-            printf 'Proxy listens on all IPv4 interfaces; firewall policy controls LAN access.\n'
+                --listen 127.0.0.1:24817 --advertise host.docker.internal:24817
+            printf 'Proxy listens on loopback; Docker Desktop connects via host.docker.internal.\n'
         else
             init_config "$config" --admin-socket /run/oci-mirror-proxy/admin.sock
         fi

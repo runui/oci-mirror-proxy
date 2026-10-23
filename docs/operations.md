@@ -99,8 +99,7 @@ backups under `%APPDATA%\oci-mirror-proxy\backups`. Applying does not restart
 Docker unless `--restart` is explicitly supplied; alternatively activate the
 settings through Docker Desktop. Remote engines, custom `DOCKER_HOST` or
 `DOCKER_CONFIG`, and Windows-container Desktop engines are rejected for automatic
-local edits. The proxy address must be reachable from Docker's Linux VM; set
-`listen`/`advertise` accordingly instead of assuming VM loopback is the host.
+local edits.
 
 ```powershell
 & $proxy dockerd plan

@@ -69,8 +69,10 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 		{name: "service update merges actual Docker configuration", service: true, update: true},
 		{name: "macOS first install", darwin: true},
 		{name: "macOS service", darwin: true, service: true},
+		{name: "macOS service preserves wildcard configuration", darwin: true, service: true, systemConfig: true},
 		{name: "macOS service failure", darwin: true, service: true, serviceFail: true},
 		{name: "macOS service update", darwin: true, service: true, existingService: true},
+		{name: "macOS service update preserves wildcard configuration", darwin: true, service: true, existingService: true, systemConfig: true},
 		{name: "macOS update rollback", darwin: true, service: true, existingService: true, serviceFail: true},
 		{name: "macOS preserves custom service", darwin: true, service: true, customService: true},
 		{name: "sudo macOS install", darwin: true, sudo: true},
@@ -122,12 +124,16 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 				userConfig = filepath.Join(home, "Library", "Application Support", "oci-mirror-proxy", "config.yaml")
 			}
 			systemConfig := filepath.Join(root, "etc", "oci-mirror-proxy", "config.yaml")
+			systemConfigContent := "existing system configuration\n"
+			if tc.darwin {
+				systemConfigContent = "version: 1\nlisten: 0.0.0.0:24817\nadvertise: host.docker.internal:24817\n"
+			}
 			customConfig := filepath.Join(root, "custom config", "proxy.yaml")
 			if tc.userConfig {
 				write(userConfig, "existing user configuration\n", 0o600)
 			}
 			if tc.systemConfig {
-				write(systemConfig, "existing system configuration\n", 0o600)
+				write(systemConfig, systemConfigContent, 0o600)
 			}
 			if tc.customExists {
 				write(customConfig, "existing custom configuration\n", 0o600)
@@ -218,8 +224,8 @@ case "$1" in
         if [ "$#" -ne 3 ]; then
             [ "$4" = --admin-socket ]
             if [ "$TEST_OS" = Darwin ]; then
-                [ "$#" -eq 9 ] && [ "$6" = --listen ] && [ "$7" = 0.0.0.0:24817 ] &&
-                    [ "$8" = --advertise ] && [ "$9" = host.docker.internal:24817 ]
+                [ "$#" -eq 9 ] && [ "$6" = --listen ] && [ "$7" = 127.0.0.1:24817 ] &&
+                    [ "$8" = --advertise ] && [ "$9" = host.docker.internal:24817 ] || exit 1
             else [ "$#" -eq 5 ]; fi
         fi
         mkdir -p "$(dirname "$3")"
@@ -433,6 +439,12 @@ esac
 				}
 			}
 			if tc.darwin && tc.service {
+				if tc.systemConfig && bytes.Contains(log, []byte("init --config "+systemConfig)) {
+					t.Fatalf("existing macOS configuration was reinitialized: %s", log)
+				}
+				if !tc.systemConfig && !tc.existingService && !bytes.Contains(out, []byte("Proxy listens on loopback")) {
+					t.Fatalf("missing macOS loopback listener notice: %s", out)
+				}
 				definition, err := os.ReadFile(servicePath)
 				if err != nil || !bytes.Contains(definition, []byte("<key>ProgramArguments</key>")) || !bytes.Contains(definition, []byte("<key>XDG_RUNTIME_DIR</key>")) {
 					t.Fatalf("missing launchd arguments or runtime environment: %v\n%s", err, definition)
@@ -479,7 +491,7 @@ esac
 			if tc.service && strings.Index(string(log), "systemctl is-active") > strings.Index(string(log), wantSync) {
 				t.Fatalf("sync ran before service setup completed: %s", log)
 			}
-			for path, content := range map[string]string{userConfig: "existing user configuration\n", systemConfig: "existing system configuration\n", customConfig: "existing custom configuration\n"} {
+			for path, content := range map[string]string{userConfig: "existing user configuration\n", systemConfig: systemConfigContent, customConfig: "existing custom configuration\n"} {
 				if (path == userConfig && tc.userConfig) || (path == systemConfig && tc.systemConfig) || (path == customConfig && tc.customExists) {
 					data, err := os.ReadFile(path)
 					if err != nil || string(data) != content {

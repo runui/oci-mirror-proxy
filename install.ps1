@@ -801,11 +801,11 @@ try {
         Protect-ServicePath $staged -ReadUsers
         if (-not (Test-Path -LiteralPath $Config)) {
             $configCreated = $true
-            # Desktop's Linux Engine has its own loopback; publish the Windows host endpoint.
-            $result = Invoke-InstallerNative $staged @('init', '--config', $Config, '--admin-socket', $adminPipe, '--listen', '0.0.0.0:24817', '--advertise', 'host.docker.internal:24817')
-            Write-Host 'Proxy listens on all IPv4 interfaces; firewall policy controls LAN access.'
+            # Keep the host listener private; advertise the Desktop host endpoint.
+            $result = Invoke-InstallerNative $staged @('init', '--config', $Config, '--admin-socket', $adminPipe, '--listen', '127.0.0.1:24817', '--advertise', 'host.docker.internal:24817')
             Show-NativeResult $result
             if ($result.ExitCode -ne 0) { throw 'Configuration initialization failed.' }
+            Write-Host 'Proxy listens on loopback; Docker Desktop connects via host.docker.internal.'
         }
         if ($existingService) {
             $wasRunning = (Get-Service -Name $ServiceName).Status -ne 'Stopped'

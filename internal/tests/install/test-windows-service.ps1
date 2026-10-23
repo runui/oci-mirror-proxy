@@ -92,6 +92,14 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "Install failed in $shell" }
             $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
             if ($service.State -ne 'Running' -or $service.StartMode -ne 'Auto' -or $service.PathName -cne ('"' + $wrapper + '"')) { throw 'Unexpected service configuration.' }
+            $infoJSON = & $installed server info --admin-socket $pipe --json
+            if ($LASTEXITCODE -ne 0) { throw 'Could not query service addresses.' }
+            $info = $infoJSON | ConvertFrom-Json
+            if ($info.config.listen -ne '127.0.0.1:24817' -or $info.config.proxy_url -ne 'http://host.docker.internal:24817') { throw 'Unexpected service addresses.' }
+            $proxyProcesses = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($service.ProcessId)" | Where-Object { $_.ExecutablePath -ieq $installed })
+            if ($proxyProcesses.Count -ne 1) { throw 'Could not identify the proxy service process.' }
+            $listeners = @(Get-NetTCPConnection -State Listen -OwningProcess $proxyProcesses[0].ProcessId)
+            if ($listeners.Count -ne 1 -or $listeners[0].LocalAddress -ne '127.0.0.1' -or $listeners[0].LocalPort -ne 24817) { throw 'Service is not listening exclusively on IPv4 loopback.' }
             $original = (Get-FileHash -LiteralPath $config).Hash
             & (Join-Path $PSScriptRoot 'test-windows-user.ps1') -Binary $installed -ServiceConfig $config -AdminPipe $pipe -WorkDirectory (Join-Path $env:ProgramData "$id-standard-user")
             Invoke-Installer $shell $args -Update

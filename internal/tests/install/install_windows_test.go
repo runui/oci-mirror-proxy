@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
+	"github.com/runui/oci-mirror-proxy/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -456,14 +457,24 @@ func TestWindowsInstallerService(t *testing.T) {
 	root := windowsInstallerTempDir(t)
 	source := filepath.Join(root, "fixture.go")
 	if err := os.WriteFile(source, []byte(`package main
-import ("os"; "strings"; "fmt")
+import ("os"; "strings"; "fmt"; "flag")
 func main() {
  args := os.Args[1:]
  if len(args)==0 { os.Exit(1) }
- switch args[0] {
- case "init":
-  for i,a := range args { if a=="--config" { if err:=os.WriteFile(args[i+1],[]byte("registries:\n  docker.io:\n    adaptive:\n      enabled: false\n"),0600); err!=nil { panic(err) }; return } }
-  os.Exit(1)
+  switch args[0] {
+  case "init":
+  flags := flag.NewFlagSet("init", flag.ExitOnError)
+  path := flags.String("config", "", "")
+  flags.String("admin-socket", "", "")
+  listen := flags.String("listen", "", "")
+  advertise := flags.String("advertise", "", "")
+  flags.Parse(args[1:])
+  if *listen != "127.0.0.1:24817" || *advertise != "host.docker.internal:24817" {
+   fmt.Fprintln(os.Stderr, "unexpected service addresses:", *listen, *advertise)
+   os.Exit(1)
+  }
+  data := fmt.Sprintf("version: 1\nlisten: %s\nadvertise: %s\nregistries:\n  docker.io:\n    adaptive:\n      enabled: false\n", *listen, *advertise)
+  if err:=os.WriteFile(*path,[]byte(data),0600); err!=nil { panic(err) }
  case "status":
   if strings.Contains(os.Getenv("TEST_SCENARIO"),"failed") { os.Exit(1) }
   case "remote":
@@ -547,12 +558,12 @@ func main() {
 		if err != nil {
 			continue
 		}
-		for _, testCase := range []string{"install", "sync failure", "info failure", "invalid info", "docker failure", "update", "failed install", "failed update", "custom definition", "custom account", "bad wrapper", "build install", "build update", "build failed update"} {
+		for _, testCase := range []string{"install", "existing wildcard config", "sync failure", "info failure", "invalid info", "docker failure", "update", "failed install", "failed update", "custom definition", "custom account", "bad wrapper", "build install", "build update", "build failed update"} {
 			t.Run(shell+"/"+testCase, func(t *testing.T) {
 				scenario := strings.TrimPrefix(testCase, "build ")
 				work := windowsInstallerTempDir(t)
 				prefix := filepath.Join(work, "prefix with spaces & unicode 中文")
-				config := filepath.Join(work, "config with spaces", "config.yaml")
+				configPath := filepath.Join(work, "config with spaces", "config.yaml")
 				script := isolateWindowsInstallerPaths(string(original))
 				script = strings.Replace(script, "$env:GOENV = 'off'", "$env:GOENV = 'off'; if ($env:GOPROXY -cne 'https://fixture-proxy.invalid') { throw 'Go proxy configuration was discarded' }", 1)
 				script = regexp.MustCompile(`(?ms)^function Test-IsAdministrator \{.*?^}`).ReplaceAllString(script, `function Test-IsAdministrator { return $$true }`)
@@ -611,17 +622,22 @@ Remove-Item Env:GOPROXY -ErrorAction SilentlyContinue
 $env:GOCACHE = Join-Path $env:TEMP 'caller-cache'
 $env:GOMODCACHE = Join-Path $env:TEMP 'caller-modules'
 $env:GOPATH = Join-Path $env:TEMP 'caller-gopath'
+$preservedConfig = "version: 1` + "`n" + `listen: 0.0.0.0:24817` + "`n" + `advertise: host.docker.internal:24817` + "`n" + `"
+if ($env:TEST_SCENARIO -eq 'existing wildcard config') {
+ New-Item -ItemType Directory -Path (Split-Path -Parent $env:TEST_CONFIG) -Force | Out-Null
+ [IO.File]::WriteAllText($env:TEST_CONFIG, $preservedConfig)
+}
 & $env:TEST_INSTALLER @params
 if ($env:GOCACHE -cne (Join-Path $env:TEMP 'caller-cache') -or $env:GOMODCACHE -cne (Join-Path $env:TEMP 'caller-modules') -or $env:GOPATH -cne (Join-Path $env:TEMP 'caller-gopath')) { throw 'Build cache environment was not restored' }
 if (Test-Path Env:GOPROXY) { throw 'Build proxy environment was not restored' }
 foreach ($path in @($env:GOCACHE,$env:GOMODCACHE,$env:GOPATH)) { if (Test-Path -LiteralPath $path) { throw 'Elevated build wrote into caller caches' } }
-if ($env:TEST_SCENARIO -in @('install', 'sync failure', 'info failure', 'invalid info', 'docker failure')) { return }
+if ($env:TEST_SCENARIO -in @('install', 'existing wildcard config', 'sync failure', 'info failure', 'invalid info', 'docker failure')) { return }
 $global:fixtureStatus = 'Running'
 Set-Service oci-mirror-proxy Manual
 if ($env:TEST_SCENARIO -eq 'custom definition') { Add-Content "$env:TEST_PREFIX\service\oci-mirror-proxy.xml" '<!-- custom -->' }
 if ($env:TEST_SCENARIO -eq 'bad wrapper') { [IO.File]::WriteAllText("$env:TEST_PREFIX\service\oci-mirror-proxy.exe", 'custom wrapper') }
 [IO.File]::WriteAllText("$env:TEST_PREFIX\bin\oci-mirror-proxy.exe", 'previous binary')
-[IO.File]::WriteAllText($env:TEST_CONFIG, 'preserved config')
+[IO.File]::WriteAllText($env:TEST_CONFIG, $preservedConfig)
 try { & $env:TEST_INSTALLER @params -Update } catch { Write-Output "EXPECTED_FAILURE: $_" }
 if (Test-Path Env:GOPROXY) { throw 'Update proxy environment was not restored' }
 foreach ($name in $buildEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name,$buildEnvironment[$name],'Process') }
@@ -649,7 +665,7 @@ if ($global:fixtureStatus -ne 'Running') { throw 'Previous service was not resto
 					}
 				}
 				log := filepath.Join(work, "operations.log")
-				cmd.Env = append(cmd.Env, "TEST_LOG="+log, "TEST_PREFIX="+prefix, "TEST_CONFIG="+config, "TEST_URL="+server.URL, "TEST_INSTALLER="+installer, "TEST_SCENARIO="+scenario, "TEMP="+work, "TMP="+work)
+				cmd.Env = append(cmd.Env, "TEST_LOG="+log, "TEST_PREFIX="+prefix, "TEST_CONFIG="+configPath, "TEST_URL="+server.URL, "TEST_INSTALLER="+installer, "TEST_SCENARIO="+scenario, "TEMP="+work, "TMP="+work)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
 					t.Fatalf("installer fixture: %v\n%s", err, out)
@@ -668,7 +684,7 @@ if ($global:fixtureStatus -ne 'Running') { throw 'Previous service was not resto
 					if !os.IsNotExist(readErr) || !bytes.Contains(ops, []byte("winsw uninstall")) {
 						t.Fatalf("initial rollback: %q %v\n%s\n%s", installed, readErr, ops, out)
 					}
-				} else if scenario == "install" || scenario == "sync failure" || scenario == "info failure" || scenario == "invalid info" || scenario == "docker failure" {
+				} else if scenario == "install" || scenario == "existing wildcard config" || scenario == "sync failure" || scenario == "info failure" || scenario == "invalid info" || scenario == "docker failure" {
 					if scenario == "install" && bytes.Contains(out, []byte("Proxy installation succeeded")) {
 						t.Fatalf("warning caused a false Docker failure:\n%s", out)
 					}
@@ -680,6 +696,19 @@ if ($global:fixtureStatus -ne 'Running') { throw 'Previous service was not resto
 					}
 					if !matchesPayload || !bytes.Contains(ops, []byte("startup Automatic")) || !bytes.Contains(ops, []byte("start")) {
 						t.Fatalf("install: %v\n%s\n%s", readErr, ops, out)
+					}
+					cfg, err := config.Load(configPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantListen := "127.0.0.1:24817"
+					if scenario == "existing wildcard config" {
+						wantListen = "0.0.0.0:24817"
+					} else if !bytes.Contains(out, []byte("Proxy listens on loopback")) {
+						t.Fatalf("missing loopback listener notice: %s", out)
+					}
+					if cfg.Listen != wantListen || cfg.ProxyURL() != "http://host.docker.internal:24817" {
+						t.Fatalf("unexpected Windows service addresses: %+v", cfg)
 					}
 					definition, err := os.ReadFile(filepath.Join(prefix, "service", "oci-mirror-proxy.xml"))
 					if err != nil {
@@ -693,15 +722,15 @@ if ($global:fixtureStatus -ne 'Running') { throw 'Previous service was not resto
 					if err := xml.Unmarshal(definition, &service); err != nil {
 						t.Fatal(err)
 					}
-					if service.Executable != filepath.Join(prefix, "bin", "oci-mirror-proxy.exe") || service.Arguments != `serve --config "`+config+`" --admin-socket "\\.\pipe\oci-mirror-proxy-admin"` || service.StartMode != "Automatic" {
+					if service.Executable != filepath.Join(prefix, "bin", "oci-mirror-proxy.exe") || service.Arguments != `serve --config "`+configPath+`" --admin-socket "\\.\pipe\oci-mirror-proxy-admin"` || service.StartMode != "Automatic" {
 						t.Fatalf("incorrect service definition: %+v", service)
 					}
 				} else {
 					if (scenario == "update" && !matchesPayload) || (scenario != "update" && !bytes.Equal(installed, []byte("previous binary"))) {
 						t.Fatalf("wrong published binary: %v\n%s\n%s", readErr, ops, out)
 					}
-					data, err := os.ReadFile(config)
-					if err != nil || string(data) != "preserved config" {
+					data, err := os.ReadFile(configPath)
+					if err != nil || string(data) != "version: 1\nlisten: 0.0.0.0:24817\nadvertise: host.docker.internal:24817\n" {
 						t.Fatalf("config overwritten: %q %v", data, err)
 					}
 					if scenario == "failed update" && !bytes.Contains(ops, []byte("startup Manual")) {
@@ -776,7 +805,9 @@ function Start-Process {
  if ($p.Prefix -cne $env:TEST_PREFIX -or $p.Config -cne $env:TEST_CONFIG -or $p.Version -cne 'vtest' -or $p.DownloadBaseUrl -cne $env:DOWNLOAD_BASE_URL -or -not $p.NoElevate) { throw 'Parameters changed' }
  if ($p.Update -ne $true -or $p.NoService -ne $false) { throw 'Switch values changed' }
  if ($env:TEST_SCENARIO -eq 'build') {
-  if (-not $p.Build -or $payload.GoPath -cne (Get-Command go -CommandType Application).Source) { throw 'Build context lost' }
+  # PATH can contain multiple Go installations; match the installer's selection.
+  $selectedGo = Get-Command go -CommandType Application | Select-Object -First 1
+  if (-not $p.Build -or $payload.GoPath -cne $selectedGo.Source) { throw 'Build context lost' }
  } elseif ($null -ne $p.Build -and $p.Build -ne $false) { throw 'Build unexpectedly enabled' }
  # Execute the actual generated bootstrap with a harmless parameter-capture
  # script. Only substitute its privilege check; never trigger real UAC.

@@ -78,8 +78,7 @@ Start-Service oci-mirror-proxy
 `dockerd plan/apply/revert` 合并 `%USERPROFILE%\.docker\daemon.json` 并保留其他设置，
 备份保存在 `%APPDATA%\oci-mirror-proxy\backups`。只有显式指定 `--restart` 才会
 重启 Docker，也可在 Desktop 界面应用设置。自动修改拒绝远端引擎、自定义 `DOCKER_HOST`、
-`DOCKER_CONFIG` 及 Windows 容器引擎。代理地址必须能从 Docker Linux VM 访问；按需设置
-`listen`/`advertise`，不要将 VM 的回环地址当成 Windows 主机。
+`DOCKER_CONFIG` 及 Windows 容器引擎。
 
 ```powershell
 & $proxy dockerd plan --config $config

@@ -41,16 +41,20 @@ func TestDesktopActivationWithoutFileChanges(t *testing.T) {
 }
 
 func TestInitDesktopAddresses(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	code, _, errOut := run(t, "init", "--config", path, "--listen", "0.0.0.0:24817", "--advertise", "host.docker.internal:24817")
-	if code != 0 {
-		t.Fatal(errOut)
-	}
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Listen != "0.0.0.0:24817" || cfg.ProxyURL() != "http://host.docker.internal:24817" {
-		t.Fatalf("unexpected Desktop config: %+v", cfg)
+	for _, listen := range []string{"127.0.0.1:24817", "0.0.0.0:24817"} {
+		t.Run(listen, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			code, _, errOut := run(t, "init", "--config", path, "--listen", listen, "--advertise", "host.docker.internal:24817")
+			if code != 0 {
+				t.Fatal(errOut)
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Listen != listen || cfg.ProxyURL() != "http://host.docker.internal:24817" {
+				t.Fatalf("unexpected Desktop config: %+v", cfg)
+			}
+		})
 	}
 }

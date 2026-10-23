@@ -43,6 +43,13 @@ func TestSystemAdminSocket(t *testing.T) {
 }
 
 func TestResolveAdminSocket(t *testing.T) {
+	// t.TempDir includes the test name, which can exceed Unix socket limits.
+	dir, err := os.MkdirTemp("", "admin-path-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	missing := filepath.Join(dir, "missing.sock")
 	cfg := config.Default()
 	cfg.Admin.Socket = filepath.Join(t.TempDir(), "configured.sock")
 	path := writeConfig(t, cfg)
@@ -68,7 +75,7 @@ func TestResolveAdminSocket(t *testing.T) {
 			if tc.explicit != "" {
 				got, err = resolveAdminSocket(tc.explicit, tc.path)
 			} else {
-				got, err = discoverAdminSocket(fallback, []string{filepath.Join(t.TempDir(), "missing.sock")})
+				got, err = discoverAdminSocket(fallback, []string{missing})
 			}
 			if (err != nil) != tc.wantErr || got != tc.want {
 				t.Fatalf("got %q, %v; want %q, error=%v", got, err, tc.want, tc.wantErr)
@@ -78,7 +85,7 @@ func TestResolveAdminSocket(t *testing.T) {
 	if err := os.WriteFile(path, []byte("invalid: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := discoverAdminSocket(fallback, []string{filepath.Join(t.TempDir(), "missing.sock")}); err != nil || got != fallback {
+	if got, err := discoverAdminSocket(fallback, []string{missing}); err != nil || got != fallback {
 		t.Fatal("client must not read invalid service configuration")
 	}
 }
