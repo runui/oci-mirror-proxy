@@ -1,4 +1,6 @@
 // Package linux implements system and rootless Docker Engine integration.
+// It owns Engine paths and Unix activation, not service configuration or user
+// backup storage. Rootless paths require an explicit runtime environment.
 package linux
 
 import (
@@ -15,7 +17,7 @@ type Adapter struct{ Locations dockerintegration.Paths }
 
 func Defaults(rootless bool) (dockerintegration.Paths, error) {
 	if !rootless {
-		return dockerintegration.Paths{CertsDir: "/etc/docker/certs.d", DaemonJSON: "/etc/docker/daemon.json", StateDir: "/var/lib/oci-mirror-proxy", DockerSocket: "/var/run/docker.sock", PidFile: "/var/run/docker.pid"}, nil
+		return dockerintegration.Paths{CertsDir: "/etc/docker/certs.d", DaemonJSON: "/etc/docker/daemon.json", DockerSocket: "/var/run/docker.sock", PidFile: "/var/run/docker.pid"}, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -29,11 +31,7 @@ func Defaults(rootless bool) (dockerintegration.Paths, error) {
 	if config == "" {
 		config = filepath.Join(home, ".config")
 	}
-	state := os.Getenv("XDG_STATE_HOME")
-	if state == "" {
-		state = filepath.Join(home, ".local", "state")
-	}
-	return dockerintegration.Paths{CertsDir: filepath.Join(config, "docker", "certs.d"), DaemonJSON: filepath.Join(config, "docker", "daemon.json"), StateDir: filepath.Join(state, "oci-mirror-proxy"), DockerSocket: filepath.Join(runtime, "docker.sock"), PidFile: filepath.Join(runtime, "docker.pid")}, nil
+	return dockerintegration.Paths{CertsDir: filepath.Join(config, "docker", "certs.d"), DaemonJSON: filepath.Join(config, "docker", "daemon.json"), DockerSocket: filepath.Join(runtime, "docker.sock"), PidFile: filepath.Join(runtime, "docker.pid")}, nil
 }
 
 func (a Adapter) Paths() dockerintegration.Paths { return a.Locations }

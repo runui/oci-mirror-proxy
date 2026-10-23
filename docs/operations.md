@@ -28,6 +28,18 @@ instead of the legacy label. Reload does not interrupt in-flight HTTP transfers.
 
 Exit codes: `0` success, `1` runtime failure, `2` usage error.
 
+Client commands require a running service and obtain configuration through its admin
+API. Select a nonstandard endpoint with `--admin-socket`.
+`serve` and `init` support selecting a configuration file.
+
+The private admin API also supports `GET /v1/config/fragments` and
+`GET`, `PUT`, `DELETE /v1/config/fragments/{name}` for direct YAML files in the
+service's configuration drop-in directory only. File responses contain `name`,
+base64-encoded `data`, and a content `revision`; list responses omit contents.
+Writes require JSON `revision` (empty for creation) and base64 `data`; deletes
+require `revision`. Stale revisions return 412. Files are limited to 1 MiB.
+Saving does not reload; use `POST /v1/reload` to apply changes.
+
 ### dockerd flags
 
 | Flag | Default (system install) | Default (rootless) |
@@ -38,7 +50,6 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error.
 | `--daemon-json` | `/etc/docker/daemon.json` | `$XDG_CONFIG_HOME/docker/daemon.json` |
 | `--docker-socket` | `/var/run/docker.sock` | `$XDG_RUNTIME_DIR/docker.sock` |
 | `--pid-file` | `/var/run/docker.pid` | `$XDG_RUNTIME_DIR/docker.pid` |
-| `--state-dir` (backup parent) | `/var/lib/oci-mirror-proxy` | `$XDG_STATE_HOME/oci-mirror-proxy` |
 
 `--store auto` asks the running dockerd which image store it uses. Pass
 `--store containerd` or `--store legacy` when dockerd is not running.
@@ -54,10 +65,10 @@ service. In an Administrator PowerShell, use:
 $proxy = "$env:ProgramFiles\oci-mirror-proxy\bin\oci-mirror-proxy.exe"
 $config = "$env:ProgramData\oci-mirror-proxy\config.yaml"
 Get-Service oci-mirror-proxy
-& $proxy status --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
-& $proxy remote update --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --region cn
+& $proxy status --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
+& $proxy remote update --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --region cn
 # After editing config.yaml:
-& $proxy reload --config $config --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
+& $proxy reload --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
 # After changing listen:
 Restart-Service oci-mirror-proxy
 # Stop / start the proxy:
@@ -84,7 +95,7 @@ Administrator PowerShell.
 For automatic Docker Desktop integration, select the local Linux-container
 context and leave `--store` unset. `dockerd plan/apply/revert` merges
 `%USERPROFILE%\.docker\daemon.json`, preserves unrelated settings, and stores
-backups under `%APPDATA%\oci-mirror-proxy\desktop-state`. Applying does not restart
+backups under `%APPDATA%\oci-mirror-proxy\backups`. Applying does not restart
 Docker unless `--restart` is explicitly supplied; alternatively activate the
 settings through Docker Desktop. Remote engines, custom `DOCKER_HOST` or
 `DOCKER_CONFIG`, and Windows-container Desktop engines are rejected for automatic
@@ -92,12 +103,12 @@ local edits. The proxy address must be reachable from Docker's Linux VM; set
 `listen`/`advertise` accordingly instead of assuming VM loopback is the host.
 
 ```powershell
-& $proxy dockerd plan --config $config
-& $proxy dockerd apply --config $config
+& $proxy dockerd plan
+& $proxy dockerd apply
 # Restart Docker Desktop manually, or use apply --restart to allow a restart.
-& $proxy doctor --config $config
+& $proxy doctor
 # To undo the configuration change:
-& $proxy dockerd revert --config $config
+& $proxy dockerd revert
 ```
 
 Explicit offline `--store` workflows use paths under `%ProgramData%\docker` and
@@ -110,7 +121,7 @@ Windows engines.
    `doctor` checks this step.
 2. Run `dockerd plan`. Read the files it shows. Nothing is written yet.
 3. Run `dockerd apply`. Files are written atomically, and any file that already
-   existed is backed up under `<state-dir>/backups/`.
+   existed is backed up under the current user's application directory, under `backups/`.
    Existing configuration is merged; no ownership or installation record is required.
 4. dockerd is signalled with `SIGHUP` when the legacy store needs it. The containerd
    store reads `hosts.toml` on every resolution, so no signal is needed.
@@ -139,15 +150,17 @@ the proxy's own routes are unchanged. Docker Hub configuration still proceeds.
 If no supported registries are configured, `plan` and `apply` succeed without
 writing files or signalling dockerd.
 
-`--state-dir` selects the backup parent directory. `--force` and `--if-managed`
-remain accepted and do not change safe merge behavior. No integration state is
-read or written. Installer upgrades perform the same merge as initial setup.
+Backups use the current
+user's application directory (`~/Library/Application Support/oci-mirror-proxy` on
+macOS, `$XDG_CONFIG_HOME/oci-mirror-proxy` or `~/.config/oci-mirror-proxy` on Linux,
+and `%APPDATA%\oci-mirror-proxy` on Windows). Installer upgrades perform the
+same safe configuration merge as initial setup.
 
 ### Reverting
 
 `dockerd revert` removes only the selected proxy entries from
 current files, preserving other settings and subsequent edits. It never restores
-a historical snapshot or deletes configuration directories. The proxy address is derived from the selected service configuration.
+a historical snapshot or deletes configuration directories. The proxy address is obtained from the selected running service.
 Containerd removal also inspects registry directories no longer in subscriptions.
 Backups are retained for explicit manual recovery, not configuration detection.
 

@@ -1,5 +1,7 @@
 // Package desktopwindows configures the user-managed Docker Desktop Engine
 // settings on Windows, never files inside its Linux VM.
+// Named-pipe detection and activation are platform-specific; CLI backup storage
+// is separate. Offline Engine workflows must not emulate Unix signals.
 package desktopwindows
 
 import (
@@ -24,13 +26,8 @@ func Defaults() (dockerintegration.Paths, error) {
 	if err != nil {
 		return dockerintegration.Paths{}, err
 	}
-	state, err := os.UserConfigDir()
-	if err != nil {
-		return dockerintegration.Paths{}, err
-	}
 	return dockerintegration.Paths{
 		DaemonJSON:   filepath.Join(home, ".docker", "daemon.json"),
-		StateDir:     filepath.Join(state, "oci-mirror-proxy", "desktop-state"),
 		DockerSocket: `\\.\pipe\dockerDesktopLinuxEngine`,
 	}, nil
 }

@@ -82,7 +82,7 @@ func TestDockerdPlanContainerdWritesNothing(t *testing.T) {
 	certs := filepath.Join(t.TempDir(), "certs.d")
 	cfg := writeConfig(t, config.Default())
 
-	code, out, errOut := run(t, "dockerd", "plan", "--config", cfg, "--store", "containerd", "--certs-dir", certs)
+	code, out, errOut := run(t, "dockerd", "plan", "--config", cfg, "--admin-socket", startTestAPI(t, cfg), "--store", "containerd", "--certs-dir", certs)
 	if code != 0 {
 		t.Fatalf("plan: code = %d, stderr = %q", code, errOut)
 	}
@@ -100,7 +100,7 @@ func TestDockerdPlanLegacyWarnsAboutOtherRegistries(t *testing.T) {
 	cfg.ApplyDefaults()
 	path := writeConfig(t, cfg)
 
-	code, out, errOut := run(t, "dockerd", "plan", "--config", path, "--store", "legacy",
+	code, out, errOut := run(t, "dockerd", "plan", "--config", path, "--admin-socket", startTestAPI(t, path), "--store", "legacy",
 		"--daemon-json", filepath.Join(t.TempDir(), "daemon.json"))
 	if code != 0 || !strings.Contains(errOut, "warning:") || !strings.Contains(errOut, "skipping ghcr.io") {
 		t.Fatalf("code = %d, stderr = %q", code, errOut)
@@ -117,7 +117,7 @@ func TestDockerdApplyLegacyWarnsAndStillConfiguresDockerHub(t *testing.T) {
 	cfg.Registries["gcr.io"] = config.Registry{}
 	cfg.ApplyDefaults()
 	path := writeConfig(t, cfg)
-	args := []string{"--config", path, "--store", "legacy", "--daemon-json", daemon,
+	args := []string{"--config", path, "--admin-socket", startTestAPI(t, path), "--store", "legacy", "--daemon-json", daemon,
 		"--state-dir", filepath.Join(root, "state"), "--no-reload"}
 	code, out, errOut := run(t, append([]string{"dockerd", "apply"}, args...)...)
 	if code != 0 || !strings.Contains(errOut, "warning:") || !strings.Contains(errOut, "skipping gcr.io") {
@@ -155,7 +155,7 @@ func TestDockerdLegacyUnsupportedOnlyIsNoOp(t *testing.T) {
 			cfg.ApplyDefaults()
 			path := writeConfig(t, cfg)
 			for _, action := range []string{"plan", "apply"} {
-				args := []string{"dockerd", action, "--config", path, "--store", "legacy", "--daemon-json", daemon}
+				args := []string{"dockerd", action, "--config", path, "--admin-socket", startTestAPI(t, path), "--store", "legacy", "--daemon-json", daemon}
 				if action == "apply" {
 					args = append(args, "--state-dir", filepath.Dir(state))
 				}
@@ -183,7 +183,12 @@ func TestDockerdApplyAndRevertRoundTrip(t *testing.T) {
 	certs := filepath.Join(root, "certs.d")
 	state := filepath.Join(root, "state")
 	cfg := writeConfig(t, config.Default())
-	args := []string{"--config", cfg, "--store", "containerd", "--certs-dir", certs, "--state-dir", state, "--no-reload"}
+	appdir := filepath.Join(root, "client")
+	t.Setenv("OCI_MIRROR_PROXY_CONFIG_HOME", appdir)
+	socket := startTestAPI(t, cfg)
+	// startTestAPI isolates storage too; select this test's asserted location.
+	t.Setenv("OCI_MIRROR_PROXY_CONFIG_HOME", appdir)
+	args := []string{"--config", cfg + ".missing", "--admin-socket", socket, "--store", "containerd", "--certs-dir", certs, "--state-dir", state, "--no-reload"}
 
 	if code, _, errOut := run(t, append([]string{"dockerd", "apply"}, args...)...); code != 0 {
 		t.Fatalf("apply: code = %d, stderr = %q", code, errOut)
@@ -202,6 +207,13 @@ func TestDockerdApplyAndRevertRoundTrip(t *testing.T) {
 	if _, err := os.Stat(certs); err != nil {
 		t.Fatal("revert must preserve configuration directories")
 	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Fatal("ignored state-dir was accessed")
+	}
+	backups, err := os.ReadDir(filepath.Join(appdir, "backups"))
+	if err != nil || len(backups) == 0 {
+		t.Fatalf("user backups missing: %v", err)
+	}
 }
 
 func TestDockerdRevertUsesDefaultConfigWithoutNewArguments(t *testing.T) {
@@ -218,9 +230,8 @@ func TestDockerdRevertUsesDefaultConfigWithoutNewArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	certs := filepath.Join(root, "certs.d")
-	// Only pre-existing offline target options are used; revert discovers the
-	// service configuration itself and never requires a new identity parameter.
-	args := []string{"--store", "containerd", "--certs-dir", certs, "--state-dir", filepath.Join(root, "backups"), "--no-reload"}
+	// Repeated revert uses the same server target without persisted state.
+	args := []string{"--admin-socket", startTestAPI(t, path), "--store", "containerd", "--certs-dir", certs, "--state-dir", filepath.Join(root, "backups"), "--no-reload"}
 	for _, action := range []string{"apply", "revert", "revert"} {
 		if code, _, stderr := run(t, append([]string{"dockerd", action}, args...)...); code != 0 {
 			t.Fatalf("%s: %s", action, stderr)

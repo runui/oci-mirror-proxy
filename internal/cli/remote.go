@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,16 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
-	"github.com/runui/oci-mirror-proxy/internal/admin"
 	"github.com/runui/oci-mirror-proxy/internal/config"
-	"github.com/runui/oci-mirror-proxy/internal/fsutil"
 )
 
 const defaultRemoteURL = "https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/subscriptions/mirrors.json"
@@ -79,14 +74,14 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return fmt.Errorf("%w: unknown remote action %q", errUsage, action)
 	}
 	fs := newFlagSet("remote "+action, stderr)
-	configFlag := fs.String("config", "", "main configuration file")
-	var raw, region, socket *string
+	configFlag := fs.String("config", "", "deprecated compatibility flag; ignored")
+	socket := fs.String("admin-socket", "", "explicit admin endpoint")
+	var raw, region *string
 	var all, dry, noReload, allowEmpty *bool
 	if action != "list" {
 		raw = fs.String("url", "", "remote JSON URL (update defaults to the repository catalog)")
 		dry = fs.Bool("dry-run", false, "preview without writing files or reloading")
 		noReload = fs.Bool("no-reload", false, "write files without notifying the proxy")
-		socket = fs.String("admin-socket", "", "admin socket to notify after writing")
 	}
 	if action == "update" {
 		region = fs.String("region", "", "comma-separated regions (empty selects all sites)")
@@ -96,12 +91,13 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err := parseFlags(fs, args[1:]); err != nil {
 		return err
 	}
-	main, err := resolveConfigPath(*configFlag)
+	_ = configFlag
+	client, err := adminClient(*socket, "")
 	if err != nil {
 		return err
 	}
 	if action == "list" {
-		files, scanErr := scanRemotes(main)
+		files, scanErr := scanRemoteClient(client)
 		tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "URL\tREGIONS\tUPSTREAMS\tFILE")
 		for _, f := range files {
@@ -130,16 +126,18 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return fmt.Errorf("%w: remote remove requires --url", errUsage)
 	}
 	var urls []string
+	savedRegions := map[string][]string{}
 	if action == "update" && *all {
 		if *raw != "" || *region != "" {
 			return fmt.Errorf("%w: --all cannot be combined with --url or --region", errUsage)
 		}
-		files, err := scanRemotes(main)
+		files, err := scanRemoteClient(client)
 		if err != nil {
 			return err
 		}
 		for _, f := range files {
 			urls = append(urls, f.meta.URL)
+			savedRegions[f.meta.URL] = f.meta.Regions
 		}
 	} else {
 		u := *raw
@@ -163,14 +161,7 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		fmt.Fprintln(stdout, "no configured remotes")
 		return nil
 	}
-	// Resolve the socket before deleting a fragment: that fragment may have
-	// contributed config needed for discovery. Do not require a running proxy.
-	var adminSocket string
-	if !*noReload && !*dry {
-		// A broken target fragment can be repaired/removed by this command.
-		// Retry discovery after committing instead of blocking the repair.
-		adminSocket, _ = resolveAdminSocket(*socket, main)
-	}
+
 	var errs []error
 	changed := false
 	succeeded := 0
@@ -186,9 +177,12 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 				continue
 			}
 		}
-		mutated, e := editRemote(ctx, main, u, regions, catalog, action, *dry, allowEmpty != nil && *allowEmpty, stdout)
-		// A directory-sync error can follow a successful rename/unlink. Its
-		// visible file change still needs a reload, even though we return 1.
+		selection := regions
+		if all != nil && *all {
+			selection = savedRegions[u]
+		}
+		mutated, e := editRemoteClient(client, u, selection, catalog, action, *dry, allowEmpty != nil && *allowEmpty, stdout)
+		// Successful writes are reloaded together after processing all sources.
 		changed = changed || mutated
 		if e != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", displayRemoteURL(u), e))
@@ -196,142 +190,22 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		}
 		succeeded++
 	}
-	// Never wait for the server while holding the configuration lock: reload
-	// reads the very files that remote editing just locked and replaced.
 	// An unchanged retry still reloads: the previous write may have succeeded
 	// while its reload failed. Idempotence must not trap the service on old data.
 	if (changed || succeeded > 0) && !*dry {
 		if *noReload {
 			fmt.Fprintln(stdout, "configuration saved; reload skipped")
 		} else {
-			var e error
-			if adminSocket == "" {
-				adminSocket, e = resolveAdminSocket(*socket, main)
-			}
-			if e == nil {
-				e = admin.NewClient(adminSocket).Reload()
-			}
+			e := client.Reload()
 			switch {
 			case e == nil:
 				fmt.Fprintln(stdout, "configuration reloaded")
 			case errors.Is(e, os.ErrNotExist) || errors.Is(e, syscall.ECONNREFUSED):
-				fmt.Fprintln(stdout, "configuration saved; proxy is not running (effective at next start)")
+				errs = append(errs, fmt.Errorf("files saved, but proxy disconnected before reload: %w", e))
 			default:
 				errs = append(errs, fmt.Errorf("files saved, but running configuration is not confirmed: %w", e))
 			}
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func editRemote(ctx context.Context, main, raw string, regions []string, catalog remoteCatalog, action string, dry, allowEmpty bool, out io.Writer) (bool, error) {
-	if !dry {
-		lockCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		unlock, err := config.Lock(lockCtx, main)
-		if err != nil {
-			return false, err
-		}
-		defer unlock()
-	}
-	path, err := remotePath(main, raw)
-	if err != nil {
-		return false, err
-	}
-	before, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, err
-	}
-	if err == nil {
-		if info, e := os.Lstat(path); e != nil || !info.Mode().IsRegular() {
-			return false, errors.New("remote must be a regular file")
-		}
-		m, managed, e := parseRemoteMeta(before)
-		if e != nil {
-			return false, e
-		}
-		if !managed || m.URL != raw {
-			return false, errors.New("refusing to replace a file owned by another source")
-		}
-	} else if action == "remove" {
-		return false, errors.New("remote is not configured")
-	}
-	var after []byte
-	if action == "update" {
-		if len(regions) == 0 {
-			regions = make([]string, 0, len(catalog.Regions))
-			for r := range catalog.Regions {
-				regions = append(regions, r)
-			}
-			sort.Strings(regions)
-		}
-		ups, err := catalog.selectEndpoints(regions)
-		if err != nil {
-			return false, err
-		}
-		if len(ups) == 0 && !allowEmpty {
-			return false, errors.New("selection is empty; use --allow-empty or remote remove")
-		}
-		after, err = remoteYAML(remoteMeta{Version: 1, URL: raw, Regions: regions}, ups)
-		if err != nil {
-			return false, err
-		}
-	}
-	// Load all other documents directly so remove can repair a malformed target
-	// fragment, and update can replace it with a newly validated candidate.
-	paths, err := config.ConfigPaths(main)
-	if err != nil {
-		return false, err
-	}
-	b := &config.Bundle{Main: main}
-	for _, p := range paths {
-		if p == path {
-			continue
-		}
-		data, e := os.ReadFile(p)
-		if e != nil {
-			return false, e
-		}
-		d, e := config.ParseDocument(p, data)
-		if e != nil {
-			return false, e
-		}
-		b.Documents = append(b.Documents, d)
-	}
-	snapshot := &config.Bundle{Main: main, Documents: append([]*config.Document(nil), b.Documents...)}
-	if before != nil {
-		snapshot.Documents = append(snapshot.Documents, &config.Document{Path: path, Data: before})
-	}
-	if err := b.Replace(path, after); err != nil {
-		return false, err
-	}
-	if bytes.Equal(before, after) {
-		fmt.Fprintf(out, "unchanged %s\n", displayRemoteURL(raw))
-		return false, nil
-	}
-	verb := "updated"
-	if action == "remove" {
-		verb = "removed"
-	}
-	if dry {
-		verb = "would " + action
-	}
-	if err := snapshot.CheckUnchanged(); err != nil {
-		return false, err
-	}
-	if dry {
-		fmt.Fprintf(out, "%s %s -> %s\n", verb, displayRemoteURL(raw), path)
-		return false, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return false, err
-	}
-	if err := commitRemote(path, before, after); err != nil {
-		if published, ok := errors.AsType[*fsutil.DurabilityError](err); ok && published.Path == path {
-			return true, err
-		}
-		return false, err
-	}
-	fmt.Fprintf(out, "%s %s -> %s\n", verb, displayRemoteURL(raw), path)
-	return true, nil
 }

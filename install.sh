@@ -92,47 +92,17 @@ init_config() {
 
 sync_remote() {
     [ -z "$sync_skip" ] || { printf '%s\n' "$sync_skip" >&2; return 1; }
-    sync_config=
-    sync_config_value=false
-    for sync_arg do
-        if [ "$sync_config_value" = true ]; then
-            sync_config=$sync_arg
-            sync_config_value=false
-            continue
-        fi
-        case "$sync_arg" in
-            --config|-config) sync_config_value=true ;;
-            --config=*|-config=*) sync_config=${sync_arg#*=} ;;
-        esac
-    done
-    if [ -n "$sync_config" ]; then
-        : # An explicit remote configuration does not change the service configuration.
-    elif [ -n "$manager" ]; then
-        sync_config=$config
+    # Subscriptions remain a client operation; persistence goes through the
+    # running service's config.d API, never direct privileged file writes.
+    if [ -n "$manager" ]; then
+        run_config "$destination" remote update "$@" --admin-socket "$service_socket"
     else
-        # Match the CLI's per-user path and user-before-system discovery order.
-        case "$os" in
-            darwin)
-                [ -n "${HOME:-}" ] || return 1
-                sync_dir="$HOME/Library/Application Support"
-                ;;
-            *)
-                sync_dir=${XDG_CONFIG_HOME:-${HOME:+$HOME/.config}}
-                [ -n "$sync_dir" ] || return 1
-                ;;
-        esac
-        sync_config="$sync_dir/oci-mirror-proxy/config.yaml"
-        if [ ! -e "$sync_config" ] && [ ! -L "$sync_config" ]; then
-            if [ -e /etc/oci-mirror-proxy/config.yaml ] || [ -L /etc/oci-mirror-proxy/config.yaml ]; then
-                sync_config=/etc/oci-mirror-proxy/config.yaml
-            fi
-        fi
+        run_config "$destination" remote update "$@"
     fi
-    if ! run_config test -e "$sync_config" && ! run_config test -L "$sync_config"; then
-        init_config "$sync_config" || return 1
-    fi
-    run_config "$destination" remote update --config "$sync_config" "$@"
 }
+
+service_socket=/run/oci-mirror-proxy/admin.sock
+[ "$(uname -s)" != Darwin ] || service_socket=/var/run/oci-mirror-proxy/admin.sock
 
 action=install
 explicit_action=false
@@ -652,7 +622,7 @@ if [ -n "$manager" ]; then
             if launchctl print "system/$service_label" > "$build_dir/launch-state" 2>&1 &&
                 grep -E 'pid = [0-9]+' "$build_dir/launch-state" >/dev/null &&
                 run_system env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME HOME=/var/root XDG_RUNTIME_DIR=/var/run \
-                    "$destination" status --config "$config" > "$build_dir/status" 2>&1; then
+                    "$destination" status --admin-socket "$service_socket" > "$build_dir/status" 2>&1; then
                 ready=true
                 break
             fi
@@ -671,7 +641,7 @@ if [ -n "$manager" ]; then
         ready=false
         attempts=0
         while [ "$attempts" -lt 15 ]; do
-            if run_system "$destination" status --config "$config" > "$build_dir/status" 2>&1; then
+            if run_system "$destination" status --admin-socket "$service_socket" > "$build_dir/status" 2>&1; then
                 ready=true
                 break
             fi
@@ -684,7 +654,7 @@ if [ -n "$manager" ]; then
         fi
     fi
     printf 'Service enabled and started (%s). Config: %s\n' "$manager" "$config"
-    printf 'Admin commands: sudo oci-mirror-proxy status --config %s\n' "$config"
+    printf 'Admin commands: sudo oci-mirror-proxy status --admin-socket %s\n' "$service_socket"
     rollback=false
 elif [ "$update" = true ]; then
     printf 'Configuration preserved. Restart any running proxy service to use the update.\n'
@@ -715,7 +685,7 @@ if [ -n "$manager" ] && [ "$skip_docker" = false ]; then
         if [ -n "$docker_user" ]; then
             handoff_dir=$(mktemp -d "${TMPDIR:-/tmp}/oci-mirror-proxy-info.XXXXXXXX") || return 1
             server_info="$handoff_dir/server-info.json"
-            run_config "$destination" server info --config "$config" --json > "$server_info" || return 1
+            run_config "$destination" server info --admin-socket "$service_socket" --json > "$server_info" || return 1
             # When invoked as root, keep the directory root-owned and grant only
             # the verified Desktop user read access. No privileged process reads
             # this handoff again; a non-root caller can keep its own ownership.
@@ -729,15 +699,15 @@ if [ -n "$manager" ] && [ "$skip_docker" = false ]; then
                 "$destination" dockerd apply --server-info "$server_info" --verify "$@"
         else
             if [ -n "$docker_endpoint" ]; then
-                run_system env -u DOCKER_CONTEXT DOCKER_HOST="$docker_endpoint" "$destination" dockerd apply --config "$config" --verify "$@"
+                run_system env -u DOCKER_CONTEXT DOCKER_HOST="$docker_endpoint" "$destination" dockerd apply --admin-socket "$service_socket" --verify "$@"
             else
-                run_system "$destination" dockerd apply --config "$config" --verify "$@"
+                run_system "$destination" dockerd apply --admin-socket "$service_socket" --verify "$@"
             fi
         fi
     }
     if ! apply_docker; then
         printf 'Warning: proxy installation succeeded, but Docker integration failed. Docker was not restarted. Fix the reported issue, then run:\n' >&2
-        printf '  (umask 077; sudo "%s" server info --config "%s" --json > server-info.json)\n' "$destination" "$config" >&2
+        printf '  (umask 077; sudo "%s" server info --admin-socket "%s" --json > server-info.json)\n' "$destination" "$service_socket" >&2
         if [ "$os" = linux ]; then
             printf 'For system Docker (select the intended Docker context first):\n' >&2
             printf '  sudo "%s" dockerd apply --server-info server-info.json --verify\n' "$destination" >&2

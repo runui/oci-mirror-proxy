@@ -13,7 +13,7 @@ func cmdServer(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("%w: want server info", errUsage)
 	}
 	fs := newFlagSet("server info", stderr)
-	path := fs.String("config", "", "configuration used only to locate the admin endpoint")
+	path := fs.String("config", "", "deprecated compatibility flag; ignored")
 	socket := fs.String("admin-socket", "", "explicit admin endpoint; does not require reading configuration")
 	asJSON := fs.Bool("json", false, "output client, server and non-secret configuration information as JSON")
 	if err := parseFlags(fs, args[1:]); err != nil {
@@ -21,11 +21,8 @@ func cmdServer(args []string, stdout, stderr io.Writer) error {
 	}
 	endpoint := *socket
 	if endpoint == "" {
-		resolved, err := resolveConfigPath(*path)
-		if err != nil {
-			return err
-		}
-		endpoint, err = resolveAdminSocket("", resolved)
+		var err error
+		endpoint, err = resolveAdminSocket("", *path)
 		if err != nil {
 			return err
 		}

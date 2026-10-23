@@ -3,10 +3,10 @@
 [English](remotes.md) | [简体中文](zh-CN/remotes.md)
 
 Subscribe to a JSON mirror catalog to select mirrors by region and save them
-to local configuration files.
+to the running service's configuration fragments. Start the service before subscribing.
 
 ```sh
-oci-mirror-proxy init
+# With the proxy service running:
 oci-mirror-proxy remote update --url https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/subscriptions/mirrors.json --region cn
 oci-mirror-proxy remote list
 oci-mirror-proxy remote update --url https://example.com/mirrors.json --region cn,apac
@@ -25,20 +25,19 @@ https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/subscriptions/mi
 Use `--url` to select a catalog; omitting both `--url` and `--all` selects the
 CLI's built-in default.
 
-The first update requires `--region`. Later updates reuse that source's saved
-regions, or replace them when `--region` is supplied. Regions are exact labels;
+Omitting `--region` selects all catalog regions; specifying it filters the selection. Regions are exact labels;
 multiple labels select their union. `global` is not included automatically.
 `--all` updates configured sources with their respective saved selections and
 cannot be combined with `--url` or `--region`.
 
-List/update/remove accept `--config`. Update/remove accept `--dry-run`, `--no-reload`,
-and `--admin-socket`. A dry run previews changes without saving them.
+List/update/remove accept `--admin-socket` to select the service.
+Update/remove accept `--dry-run` and `--no-reload`. A dry run previews changes without saving them.
 An empty selection is rejected unless `update --allow-empty` is explicit.
 `remove` always requires `--url`. There is no background updater.
 
 ## Inspect a catalog
 
-`remote list` lists locally configured sources. Use `remote show` to download a
+`remote list` lists sources configured on the selected service. Use `remote show` to download a
 catalog and inspect its mirror sites without subscribing or creating local files:
 
 ```sh
@@ -79,7 +78,8 @@ recognize the subscription.
 Protect these files if a source URL contains a private query token. CLI output
 redacts queries; generated files and backups have mode `0600`.
 
-Updates are validated with the rest of the configuration and saved atomically.
+Files are saved atomically; reload validates the complete configuration before
+applying it. Invalid saved fragments can be repaired or removed through the CLI.
 The previous file is backed up to `.yaml.bak`; if the backup fails, the current
 file is not changed. First creation has no previous backup; unchanged updates
 rewrite neither current nor backup. Removing a source also creates a backup.
@@ -88,7 +88,8 @@ its original `.yaml` path, then run `reload`.
 
 With `--all`, successful sources remain updated when another source fails;
 any failure exits with `1`. Reload is attempted after processing the sources.
-If the proxy is stopped, files take effect at startup.
+The service must be running for file operations. `--no-reload` saves without
+applying; those files take effect after a successful reload or restart.
 If reload is rejected or times out, the CLI reports that files are saved but
 runtime application is unconfirmed, and exits with `1`. Saved files are kept;
 run `oci-mirror-proxy reload` or repeat the update to retry reloading.

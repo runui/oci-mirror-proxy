@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -16,7 +15,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/runui/oci-mirror-proxy/internal/config"
-	"github.com/runui/oci-mirror-proxy/internal/fsutil"
 )
 
 const remoteMarker = "# Managed by oci-mirror-proxy remote."
@@ -77,39 +75,6 @@ func parseRemoteMeta(data []byte) (remoteMeta, bool, error) {
 	return m, true, errors.New("missing remote metadata")
 }
 
-func scanRemotes(main string) ([]remoteFile, error) {
-	paths, err := config.ConfigPaths(main)
-	if err != nil {
-		return nil, err
-	}
-	var out []remoteFile
-	var errs []error
-	seen := map[string]bool{}
-	for _, p := range paths[1:] {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		m, managed, err := parseRemoteMeta(data)
-		if !managed {
-			continue
-		}
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", p, err))
-			continue
-		}
-		expected, _ := remotePath(main, m.URL)
-		if p != expected || seen[m.URL] {
-			errs = append(errs, fmt.Errorf("%s: remote identity/path mismatch", p))
-			continue
-		}
-		seen[m.URL] = true
-		out = append(out, remoteFile{p, data, m})
-	}
-	return out, errors.Join(errs...)
-}
-
 func remoteYAML(meta remoteMeta, ups map[string][]config.Upstream) ([]byte, error) {
 	// This wire type intentionally excludes IDs, credentials, TLS and timeouts.
 	// Unset fields must stay absent so a source never overwrites local settings
@@ -144,39 +109,6 @@ func remoteYAML(meta remoteMeta, ups map[string][]config.Upstream) ([]byte, erro
 		return nil, err
 	}
 	return []byte(remoteMarker + "\n" + remotePrefix + string(m) + "\n\n" + string(data)), nil
-}
-
-// commitRemote preserves exactly the previous on-disk result, including its
-// metadata, before publishing a replacement. .bak never participates in merge.
-// A crash after backup but before rename leaves the current result untouched.
-func commitRemote(path string, before, after []byte) error {
-	if bytes.Equal(before, after) {
-		return nil
-	}
-	if before != nil {
-		current, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if !bytes.Equal(current, before) {
-			return errors.New("remote changed concurrently")
-		}
-		if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
-			return errors.New("remote must be a regular file")
-		}
-		if info, err := os.Lstat(path + ".bak"); err == nil && !info.Mode().IsRegular() {
-			return errors.New("backup must be a regular file")
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := fsutil.WriteFileAtomic(path+".bak", before, 0o600); err != nil {
-			return fmt.Errorf("backup previous remote: %w", err)
-		}
-	}
-	if err := config.Commit(path, before, after); err != nil {
-		return err
-	}
-	return nil
 }
 
 func cleanRegions(raw string) ([]string, error) {

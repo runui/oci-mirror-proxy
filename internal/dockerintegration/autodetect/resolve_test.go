@@ -35,7 +35,7 @@ func TestLocalNamedPipeEndpoint(t *testing.T) {
 
 func TestOfflineOverrides(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "ssh://must-not-contact")
-	adapter, err := Resolve(t.Context(), Options{Store: "legacy", Overrides: dockerintegration.Paths{DaemonJSON: "/test/daemon.json", StateDir: "/test/state"}})
+	adapter, err := Resolve(t.Context(), Options{Store: "legacy", Overrides: dockerintegration.Paths{DaemonJSON: "/test/daemon.json"}})
 	if err != nil {
 		t.Fatal(err)
 	}

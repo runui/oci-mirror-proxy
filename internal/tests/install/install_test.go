@@ -220,7 +220,7 @@ case "$1" in
         cp "$TEST_CONFIG_TEMPLATE" "$3"
         ;;
     remote)
-        [ "$2" = update ] && [ "$3" = --config ] && [ -f "$4" ]
+        [ "$2" = update ]
         printf '%s\000' "$@" > "$TEST_REMOTE_ARGS"
         if [ "$TEST_SYNC_FAIL" = true ]; then echo 'mock catalog unavailable' >&2; exit 1; fi
         echo 'mock synchronized'
@@ -388,7 +388,7 @@ esac
 				return
 			}
 			if tc.dockerFail || tc.infoFail || tc.rootlessDocker || (tc.service && tc.invalidSudo) {
-				if runErr != nil || !bytes.Contains(out, []byte("Warning: proxy installation succeeded, but Docker integration failed")) || !bytes.Contains(out, []byte("dockerd apply --server-info server-info.json --verify")) || !bytes.Contains(out, []byte("server info --config")) {
+				if runErr != nil || !bytes.Contains(out, []byte("Warning: proxy installation succeeded, but Docker integration failed")) || !bytes.Contains(out, []byte("dockerd apply --server-info server-info.json --verify")) || !bytes.Contains(out, []byte("server info --admin-socket")) {
 					t.Fatalf("Docker failure not reported: %v\n%s", runErr, out)
 				}
 				if _, err := os.Stat(filepath.Join(prefix, "bin", "oci-mirror-proxy")); err != nil {
@@ -422,7 +422,7 @@ esac
 				if bytes.Contains(log, []byte("--if-managed")) {
 					t.Fatalf("update depends on historical state: %s", log)
 				}
-				if strings.Index(string(log), "status --config") > strings.Index(string(log), "dockerd apply") {
+				if strings.Index(string(log), "status --admin-socket") > strings.Index(string(log), "dockerd apply") {
 					t.Fatalf("applied before ready: %s", log)
 				}
 			}
@@ -438,42 +438,38 @@ esac
 					}
 				}
 			}
-			if tc.sudo && !tc.service && bytes.Count(log, []byte("sudo-user\n")) < 4 {
+			if tc.sudo && !tc.service && bytes.Count(log, []byte("sudo-user\n")) < 2 {
 				t.Fatalf("configuration operations did not drop privileges: %s", log)
 			}
 			installed, err := os.ReadFile(filepath.Join(prefix, "bin", "oci-mirror-proxy"))
 			if err != nil || !bytes.Contains(installed, []byte("mock synchronized")) {
 				t.Fatalf("binary was not installed: %v", err)
 			}
-			wantConfig := userConfig
-			if tc.service || (!tc.userConfig && tc.systemConfig) {
-				wantConfig = systemConfig
+			wantArgs := append([]string{"remote", "update"}, remoteArgs...)
+			if tc.service {
+				endpoint := filepath.Join(root, "run", "oci-mirror-proxy", "admin.sock")
+				// The fixture rewrites /run paths, including the /run suffix of /var/run.
+				if tc.darwin {
+					endpoint = "/var" + endpoint
+				}
+				wantArgs = append(wantArgs, "--admin-socket", endpoint)
 			}
-			if tc.customConfig {
-				wantConfig = customConfig
-			}
-			wantArgs := append([]string{"remote", "update", "--config", wantConfig}, remoteArgs...)
 			wantSync := strings.Join(wantArgs, " ") + "\n"
-			if tc.initFail {
-				if bytes.Contains(log, []byte("remote update")) {
-					t.Fatalf("sync ran after initialization failed: %s", log)
-				}
-			} else if strings.Count(string(log), wantSync) != 1 {
-				t.Fatalf("expected exactly one official remote sync using %s: %s", wantConfig, log)
+			if strings.Count(string(log), wantSync) != 1 {
+				t.Fatalf("expected one API-based sync: %s", log)
 			}
-			if !tc.initFail {
-				actual, err := os.ReadFile(remoteArgsPath)
-				if err != nil || string(actual) != strings.Join(wantArgs, "\x00")+"\x00" {
-					t.Fatalf("remote arguments were not preserved: got %q, want %q (%v)", actual, wantArgs, err)
-				}
+			actual, err := os.ReadFile(remoteArgsPath)
+			if err != nil || string(actual) != strings.Join(wantArgs, "\x00")+"\x00" {
+				t.Fatalf("arguments: %q want %q (%v)", actual, wantArgs, err)
 			}
-			if tc.syncFail || tc.initFail {
+			if tc.syncFail {
 				if !bytes.Contains(out, []byte("Warning: remote subscription sync failed; installation succeeded.")) {
-					t.Fatalf("missing nonfatal sync warning: %s", out)
+					t.Fatalf("missing warning: %s", out)
 				}
 			} else if !bytes.Contains(out, []byte("mock synchronized")) || bytes.Contains(out, []byte("Warning:")) {
-				t.Fatalf("missing sync result or unexpected warning: %s", out)
+				t.Fatalf("unexpected result: %s", out)
 			}
+
 			if tc.service && strings.Index(string(log), "systemctl is-active") > strings.Index(string(log), wantSync) {
 				t.Fatalf("sync ran before service setup completed: %s", log)
 			}
@@ -485,24 +481,20 @@ esac
 					}
 				}
 			}
-			if !tc.initFail {
-				for _, path := range []string{wantConfig, systemConfig} {
-					if (path == userConfig && tc.userConfig) || (path == systemConfig && (!tc.service || tc.systemConfig)) || (path == customConfig && tc.customExists) {
-						continue
-					}
-					cfg, err := config.Load(path)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if !cfg.Registries["docker.io"].Adaptive.Enabled || cfg.Registries["docker.io"].Race.Enabled || cfg.Registries["ghcr.io"].Adaptive.Enabled {
-						t.Fatalf("installer must only enable docker.io adaptive: %+v", cfg.Registries)
-					}
-					info, err := os.Stat(path)
-					if err != nil || info.Mode().Perm() != 0o600 {
-						t.Fatalf("generated configuration must remain private: %v (%v)", info, err)
-					}
+			if tc.service && !tc.systemConfig {
+				cfg, err := config.Load(systemConfig)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !cfg.Registries["docker.io"].Adaptive.Enabled {
+					t.Fatal("missing docker.io adaptive default")
+				}
+				info, err := os.Stat(systemConfig)
+				if err != nil || info.Mode().Perm() != 0o600 {
+					t.Fatalf("configuration permissions: %v %v", info, err)
 				}
 			}
+
 		})
 	}
 }

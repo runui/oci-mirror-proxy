@@ -1,5 +1,9 @@
 // Package config defines the configuration model, its defaults and its
 // validation. It depends only on other leaf packages.
+// Bundles own document merge and persistence; FragmentStore confines raw access
+// to config.d without requiring valid YAML, keeping repair paths available.
+// Storage never publishes runtime configuration or interprets subscriptions.
+// Cooperative writers share Lock; external editors may still race publication.
 package config
 
 import (

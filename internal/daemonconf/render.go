@@ -1,5 +1,9 @@
 // Package daemonconf configures dockerd to use the proxy. Rendering is pure and
 // produces a Plan; Applier backs up and atomically publishes actual changes.
+// Callers supply target paths and backup storage; this package does not discover
+// services, parse subscription catalogs or persist integration ownership state.
+// All changed existing files must be backed up before publication. Atomicity is
+// per file, so failures report already-visible writes rather than imply rollback.
 package daemonconf
 
 import (

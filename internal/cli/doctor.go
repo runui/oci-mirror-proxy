@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/runui/oci-mirror-proxy/internal/config"
 	"github.com/runui/oci-mirror-proxy/internal/daemonconf"
 )
 
@@ -25,11 +24,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err := flags.adapter.Validate(ctx); err != nil {
 		return err
 	}
-	cfgPath, err := resolveConfigPath(flags.configPath)
-	if err != nil {
-		return err
-	}
-	cfg, err := config.Load(cfgPath)
+	target, err := flags.serverTarget()
 	if err != nil {
 		return err
 	}
@@ -38,7 +33,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	var expected []daemonconf.File
 	mirrorSettings := false
 	if _, err := storeForDoctor(flags.store, info, infoErr); err == nil {
-		plan, err := flags.adapter.Render(ctx, targetFor(cfg), flags.store)
+		plan, err := flags.adapter.Render(ctx, target, flags.store)
 		if err != nil {
 			return fmt.Errorf("inspect Docker configuration: %w", err)
 		}
@@ -48,7 +43,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 
 	checks := daemonconf.Diagnose(ctx, daemonconf.DiagnoseInput{
-		ProxyURL:       cfg.ProxyURL(),
+		ProxyURL:       target.ProxyURL,
 		Info:           info,
 		InfoErr:        infoErr,
 		Expected:       expected,

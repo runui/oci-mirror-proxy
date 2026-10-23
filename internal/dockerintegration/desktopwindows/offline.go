@@ -23,14 +23,9 @@ func OfflineDefaults(rootless bool) (dockerintegration.Paths, error) {
 	if data == "" {
 		return dockerintegration.Paths{}, fmt.Errorf("ProgramData is required to locate Windows Docker configuration")
 	}
-	user, err := os.UserConfigDir()
-	if err != nil {
-		return dockerintegration.Paths{}, err
-	}
 	return dockerintegration.Paths{
 		DaemonJSON:   filepath.Join(data, "docker", "config", "daemon.json"),
 		CertsDir:     filepath.Join(data, "docker", "certs.d"),
-		StateDir:     filepath.Join(user, "oci-mirror-proxy", "engine-state"),
 		DockerSocket: `\\.\pipe\docker_engine`,
 	}, nil
 }

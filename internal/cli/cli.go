@@ -1,6 +1,10 @@
 // Package cli implements the oci-mirror-proxy command line. Run takes its
 // arguments and writers as parameters, so the whole interface is testable
 // without starting a process.
+// Client commands consume the admin API, not service YAML; only serve and init
+// select local service configuration. Subscription interpretation stays here,
+// behind fragmentClient storage. Adapters own Docker paths and activation. This
+// layer owns compatibility and output, not persistence or implicit elevation.
 package cli
 
 import (
@@ -8,9 +12,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/runui/oci-mirror-proxy/internal/admin"
 	"io"
 	"os"
 	"runtime"
+	"syscall"
 
 	"github.com/runui/oci-mirror-proxy/internal/config"
 )
@@ -151,28 +157,39 @@ func discoverConfigPath(userPath, systemPath string) (string, error) {
 	return userPath, nil
 }
 
-// resolveAdminSocket shares the same configuration lookup for clients and serve.
-func resolveAdminSocket(explicit, configPath string) (string, error) {
+// resolveAdminSocket never reads service YAML. A permission or protocol error
+// must not redirect a command to a different service instance.
+func resolveAdminSocket(explicit, _ string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	path, err := resolveConfigPath(configPath)
+	user, err := config.DefaultAdminSocket()
 	if err != nil {
 		return "", err
 	}
-	cfg, err := config.Load(path)
-	if err != nil {
-		if configPath != "" || !errors.Is(err, os.ErrNotExist) {
-			return "", err
+	candidates := []string{user}
+	if runtime.GOOS == "windows" {
+		candidates = append(candidates, `\\.\pipe\oci-mirror-proxy-admin`)
+	} else {
+		candidates = append(candidates, systemAdminSocket(runtime.GOOS))
+	}
+	var found string
+	for _, endpoint := range candidates {
+		if _, err := admin.NewClient(endpoint).Status(); err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+				continue
+			}
+			return "", fmt.Errorf("discover admin endpoint %s (use --admin-socket to select explicitly): %w", endpoint, err)
 		}
-	} else if cfg.Admin.Socket != "" {
-		return cfg.Admin.Socket, nil
+		if found != "" {
+			return "", fmt.Errorf("multiple proxy services found; select one with --admin-socket")
+		}
+		found = endpoint
 	}
-	// Older service installs supplied this socket only in the service definition.
-	if path == "/etc/oci-mirror-proxy/config.yaml" {
-		return systemAdminSocket(runtime.GOOS), nil
+	if found != "" {
+		return found, nil
 	}
-	return config.DefaultAdminSocket()
+	return user, nil
 }
 
 func systemAdminSocket(goos string) string {

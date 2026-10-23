@@ -13,7 +13,7 @@ import (
 // cmdStatus prints the health of every upstream of a running proxy.
 func cmdStatus(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("status", stderr)
-	configPath := fs.String("config", "", "configuration file (default: user or system configuration)")
+	configPath := fs.String("config", "", "deprecated compatibility flag; ignored")
 	socketFlag := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
@@ -45,7 +45,7 @@ func cmdStatus(args []string, stdout, stderr io.Writer) error {
 // cmdReload asks a running proxy to re-read its configuration file.
 func cmdReload(args []string, stderr io.Writer) error {
 	fs := newFlagSet("reload", stderr)
-	configPath := fs.String("config", "", "configuration file (default: user or system configuration)")
+	configPath := fs.String("config", "", "deprecated compatibility flag; ignored")
 	socketFlag := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
@@ -64,7 +64,7 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 	}
 	action, rest := args[0], args[1:]
 	fs := newFlagSet("upstream "+action, stderr)
-	configPath := fs.String("config", "", "configuration file (default: user or system configuration)")
+	configPath := fs.String("config", "", "deprecated compatibility flag; ignored")
 	socketFlag := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
 	registry := fs.String("registry", ociapi.DefaultAlias, "registry alias")
 

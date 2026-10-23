@@ -8,20 +8,18 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/runui/oci-mirror-proxy/internal/admin"
-	"github.com/runui/oci-mirror-proxy/internal/config"
 	"github.com/runui/oci-mirror-proxy/internal/daemonconf"
 	"github.com/runui/oci-mirror-proxy/internal/dockerintegration"
 	"github.com/runui/oci-mirror-proxy/internal/dockerintegration/autodetect"
 	linuxintegration "github.com/runui/oci-mirror-proxy/internal/dockerintegration/linux"
+	"github.com/runui/oci-mirror-proxy/internal/userdir"
 )
 
 // dockerPaths are the locations that the dockerd integration reads and writes.
@@ -34,26 +32,29 @@ func defaultDockerPaths(rootless bool) (dockerPaths, error) {
 
 // dockerFlags are the flags shared by every dockerd and doctor subcommand.
 type dockerFlags struct {
-	restart    bool
-	adapter    dockerintegration.Adapter
-	configPath string
-	store      string
-	rootless   bool
-	certsDir   string
-	daemonJSON string
-	stateDir   string
-	dockerSock string
-	pidFile    string
-	force      bool
-	noReload   bool
-	serverInfo string
-	ifManaged  bool
-	remove     bool
-	verify     bool
+	restart     bool
+	adapter     dockerintegration.Adapter
+	configPath  string
+	adminSocket string
+	target      *daemonconf.Target
+	store       string
+	rootless    bool
+	certsDir    string
+	daemonJSON  string
+	stateDir    string
+	dockerSock  string
+	pidFile     string
+	force       bool
+	noReload    bool
+	serverInfo  string
+	ifManaged   bool
+	remove      bool
+	verify      bool
 }
 
 func (f *dockerFlags) register(fs *flag.FlagSet, withApplyFlags bool) {
-	fs.StringVar(&f.configPath, "config", "", "proxy configuration file (default: per-user location)")
+	fs.StringVar(&f.configPath, "config", "", "deprecated compatibility flag; ignored")
+	fs.StringVar(&f.adminSocket, "admin-socket", "", "explicit admin endpoint")
 	fs.StringVar(&f.serverInfo, "server-info", "", "read server info --json output from FILE instead of private service configuration")
 	fs.StringVar(&f.store, "store", "auto", "image store: auto, containerd or legacy")
 	fs.BoolVar(&f.rootless, "rootless", false, "target a rootless dockerd (per-user paths)")
@@ -63,7 +64,7 @@ func (f *dockerFlags) register(fs *flag.FlagSet, withApplyFlags bool) {
 	fs.StringVar(&f.pidFile, "pid-file", "", "override the dockerd pid file path")
 	if withApplyFlags {
 		fs.BoolVar(&f.restart, "restart", false, "allow restarting Docker to activate settings (interrupts containers)")
-		fs.StringVar(&f.stateDir, "state-dir", "", "directory for configuration backups (under backups/)")
+		fs.StringVar(&f.stateDir, "state-dir", "", "deprecated compatibility flag; ignored")
 		fs.BoolVar(&f.force, "force", false, "compatibility flag; existing configuration is always merged safely")
 		fs.BoolVar(&f.noReload, "no-reload", false, "do not signal dockerd after changing registry-mirrors")
 		fs.BoolVar(&f.ifManaged, "if-managed", false, "compatibility flag; actual configuration is always inspected")
@@ -75,7 +76,7 @@ func (f *dockerFlags) register(fs *flag.FlagSet, withApplyFlags bool) {
 func (f *dockerFlags) resolve(ctx context.Context) (dockerPaths, error) {
 	adapter, err := autodetect.Resolve(ctx, autodetect.Options{
 		Rootless: f.rootless, Store: f.store,
-		Overrides: dockerintegration.Paths{CertsDir: f.certsDir, DaemonJSON: f.daemonJSON, StateDir: f.stateDir, DockerSocket: f.dockerSock, PidFile: f.pidFile},
+		Overrides: dockerintegration.Paths{CertsDir: f.certsDir, DaemonJSON: f.daemonJSON, DockerSocket: f.dockerSock, PidFile: f.pidFile},
 	})
 	if err != nil {
 		return dockerPaths{}, err
@@ -112,7 +113,6 @@ func cmdDockerd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return fmt.Errorf("--restart and --no-reload cannot be combined")
 	}
 	flags.remove = action == "revert"
-	applier := daemonconf.Applier{BackupDir: filepath.Join(paths.StateDir, "backups")}
 
 	switch action {
 	case "plan":
@@ -125,6 +125,11 @@ func cmdDockerd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return nil
 
 	case "apply", "revert":
+		dir, err := userdir.Dir()
+		if err != nil {
+			return err
+		}
+		applier := daemonconf.Applier{BackupDir: filepath.Join(dir, "backups")}
 		plan, err := buildPlan(ctx, &flags, paths)
 		if err != nil {
 			return err
@@ -165,26 +170,10 @@ func cmdDockerd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 // buildPlan reads the proxy configuration and renders the files for the image store.
 // It only reads; nothing is written here.
 func buildPlan(ctx context.Context, flags *dockerFlags, paths dockerPaths) (daemonconf.Plan, error) {
-	if flags.serverInfo != "" {
-		target, err := readServerTarget(flags)
-		if err != nil {
-			return daemonconf.Plan{}, err
-		}
-		target.Remove = flags.remove
-		if err := validateDockerTarget(target); err != nil {
-			return daemonconf.Plan{}, err
-		}
-		return flags.adapter.Render(ctx, target, flags.store)
-	}
-	cfgPath, err := resolveConfigPath(flags.configPath)
+	target, err := flags.serverTarget()
 	if err != nil {
 		return daemonconf.Plan{}, err
 	}
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return daemonconf.Plan{}, err
-	}
-	target := targetFor(cfg)
 	target.Remove = flags.remove
 	if err := validateDockerTarget(target); err != nil {
 		return daemonconf.Plan{}, err
@@ -210,12 +199,49 @@ func validateDockerTarget(target daemonconf.Target) error {
 	return nil
 }
 
+// serverTarget pins one validated server snapshot for planning and verification.
+// Server data supplies renderer inputs, never local paths or execution policy.
+func (f *dockerFlags) serverTarget() (daemonconf.Target, error) {
+	if f.target != nil {
+		return *f.target, nil
+	}
+	var target daemonconf.Target
+	var err error
+	if f.serverInfo != "" {
+		if f.adminSocket != "" {
+			return target, fmt.Errorf("--server-info and --admin-socket cannot be combined")
+		}
+		target, err = readServerTarget(f)
+	} else {
+		var client *admin.Client
+		client, err = adminClient(f.adminSocket, "")
+		if err == nil {
+			var info admin.ServerInfo
+			info, err = client.Info()
+			if err == nil {
+				if info.SchemaVersion != 1 {
+					return target, fmt.Errorf("unsupported server information schema %d", info.SchemaVersion)
+				}
+				target.ProxyURL = info.Config.ProxyURL
+				for _, route := range info.Config.Registries {
+					target.Routes = append(target.Routes, daemonconf.Route{Alias: route.Alias, Origin: route.Origin})
+				}
+			}
+		}
+	}
+	if err != nil {
+		return target, err
+	}
+	if err := validateDockerTarget(target); err != nil {
+		return target, err
+	}
+	f.target = &target
+	return target, nil
+}
+
 // Only renderer inputs cross the privilege boundary. JSON never selects Docker
 // sockets, output paths or permissions: those still come from local detection.
 func readServerTarget(flags *dockerFlags) (daemonconf.Target, error) {
-	if flags.configPath != "" {
-		return daemonconf.Target{}, fmt.Errorf("--server-info and --config cannot be combined")
-	}
 	f, err := os.Open(flags.serverInfo)
 	if err != nil {
 		return daemonconf.Target{}, err
@@ -252,24 +278,11 @@ func verifyIntegration(ctx context.Context, out io.Writer, plan daemonconf.Plan,
 	// loaded mirrors; Desktop may legitimately remain pending without a restart.
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var targetURL string
-	if flags.serverInfo != "" {
-		target, err := readServerTarget(flags)
-		if err != nil {
-			return err
-		}
-		targetURL = target.ProxyURL
-	} else {
-		path, err := resolveConfigPath(flags.configPath)
-		if err != nil {
-			return err
-		}
-		cfg, err := config.Load(path)
-		if err != nil {
-			return err
-		}
-		targetURL = cfg.ProxyURL()
+	target, err := flags.serverTarget()
+	if err != nil {
+		return err
 	}
+	targetURL := target.ProxyURL
 	for {
 		info, infoErr := daemonconf.FetchInfo(ctx, flags.adapter.Paths().DockerSocket)
 		checks := daemonconf.Diagnose(ctx, daemonconf.DiagnoseInput{ProxyURL: targetURL, Info: info, InfoErr: infoErr, Expected: plan.Files, MirrorSettings: plan.Store == daemonconf.StoreDesktop, Remove: flags.remove})
@@ -317,15 +330,6 @@ func activateIntegration(ctx context.Context, out io.Writer, needed bool, flags 
 	}
 	fmt.Fprintln(out, "Docker configuration activated")
 	return nil
-}
-
-// targetFor converts the proxy configuration into what the renderers need.
-func targetFor(cfg config.Config) daemonconf.Target {
-	t := daemonconf.Target{ProxyURL: cfg.ProxyURL()}
-	for _, alias := range slices.Sorted(maps.Keys(cfg.Registries)) {
-		t.Routes = append(t.Routes, daemonconf.Route{Alias: alias, Origin: cfg.Registries[alias].Origin})
-	}
-	return t
 }
 
 func printPlan(w io.Writer, plan daemonconf.Plan) {

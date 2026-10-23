@@ -3,11 +3,13 @@ package admin
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 )
 
-const maxRequestBody = 1 << 20
+// JSON base64 encoding of a maximum-sized fragment needs more than 1 MiB.
+const maxRequestBody = 2 << 20
 
 // NewHTTPServer returns an HTTP server that serves the admin API. The caller
 // supplies the listener, usually a unix socket from Listen.
@@ -30,6 +32,10 @@ func NewHTTPServer(ctl Controller) *http.Server {
 	mux.HandleFunc("PATCH /v1/registries/{alias}/upstreams/{id}", s.patchUpstream)
 	mux.HandleFunc("DELETE /v1/registries/{alias}/upstreams/{id}", s.removeUpstream)
 	mux.HandleFunc("POST /v1/reload", s.reload)
+	mux.HandleFunc("GET /v1/config/fragments", s.fragments)
+	mux.HandleFunc("GET /v1/config/fragments/{name}", s.fragments)
+	mux.HandleFunc("PUT /v1/config/fragments/{name}", s.fragments)
+	mux.HandleFunc("DELETE /v1/config/fragments/{name}", s.fragments)
 	return &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -122,6 +128,10 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body: " + err.Error()})
+		return false
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "request must contain exactly one JSON value"})
 		return false
 	}
 	return true

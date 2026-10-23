@@ -1,4 +1,6 @@
 // Package autodetect is the only place that selects platform adapters.
+// It interprets local Docker context and explicit target overrides, not service
+// renderer data. Selection never elevates privileges or chooses CLI storage.
 package autodetect
 
 import (
@@ -78,7 +80,7 @@ func Resolve(ctx context.Context, o Options) (dockerintegration.Adapter, error) 
 		value string
 	}{
 		{&paths.CertsDir, o.Overrides.CertsDir}, {&paths.DaemonJSON, o.Overrides.DaemonJSON},
-		{&paths.StateDir, o.Overrides.StateDir}, {&paths.DockerSocket, o.Overrides.DockerSocket}, {&paths.PidFile, o.Overrides.PidFile},
+		{&paths.DockerSocket, o.Overrides.DockerSocket}, {&paths.PidFile, o.Overrides.PidFile},
 	} {
 		if field.value != "" {
 			*field.dst = field.value

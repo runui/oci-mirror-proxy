@@ -1,5 +1,8 @@
 // Package desktopmac integrates with the user-managed Docker Desktop Engine
 // configuration, never with files inside its Linux VM.
+// Desktop adapters only modify host-side Engine settings, never VM internals.
+// Activation requires explicit restart consent; backup storage belongs to the
+// CLI, and shared merge behavior must not assume the caller is privileged.
 package desktopmac
 
 import (
@@ -27,7 +30,7 @@ func Defaults() (dockerintegration.Paths, error) {
 	if err != nil {
 		return dockerintegration.Paths{}, err
 	}
-	return dockerintegration.Paths{DaemonJSON: filepath.Join(home, ".docker", "daemon.json"), StateDir: filepath.Join(home, "Library", "Application Support", "oci-mirror-proxy", "desktop-state"), DockerSocket: filepath.Join(home, ".docker", "run", "docker.sock")}, nil
+	return dockerintegration.Paths{DaemonJSON: filepath.Join(home, ".docker", "daemon.json"), DockerSocket: filepath.Join(home, ".docker", "run", "docker.sock")}, nil
 }
 
 func (a Adapter) command(ctx context.Context, args ...string) ([]byte, error) {

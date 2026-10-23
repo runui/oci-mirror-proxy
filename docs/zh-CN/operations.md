@@ -37,7 +37,6 @@
 | `--daemon-json` | `/etc/docker/daemon.json` | `$XDG_CONFIG_HOME/docker/daemon.json` |
 | `--docker-socket` | `/var/run/docker.sock` | `$XDG_RUNTIME_DIR/docker.sock` |
 | `--pid-file` | `/var/run/docker.pid` | `$XDG_RUNTIME_DIR/docker.pid` |
-| `--state-dir`（备份父目录） | `/var/lib/oci-mirror-proxy` | `$XDG_STATE_HOME/oci-mirror-proxy` |
 
 `--store auto` 会向运行中的 dockerd 查询所用镜像存储后端。dockerd 未运行时，请传入 `--store containerd` 或 `--store legacy`。
 
@@ -77,7 +76,7 @@ Start-Service oci-mirror-proxy
 
 自动接入 Docker Desktop 时请选择本地 Linux 容器上下文，不要指定 `--store`。
 `dockerd plan/apply/revert` 合并 `%USERPROFILE%\.docker\daemon.json` 并保留其他设置，
-备份保存在 `%APPDATA%\oci-mirror-proxy\desktop-state`。只有显式指定 `--restart` 才会
+备份保存在 `%APPDATA%\oci-mirror-proxy\backups`。只有显式指定 `--restart` 才会
 重启 Docker，也可在 Desktop 界面应用设置。自动修改拒绝远端引擎、自定义 `DOCKER_HOST`、
 `DOCKER_CONFIG` 及 Windows 容器引擎。代理地址必须能从 Docker Linux VM 访问；按需设置
 `listen`/`advertise`，不要将 VM 的回环地址当成 Windows 主机。
@@ -163,4 +162,6 @@ rootless 默认使用 `$XDG_CONFIG_HOME/docker/daemon.json` 和 `$XDG_RUNTIME_DI
 | `secret ... not set or empty` | 代理进程环境中缺少 `password` 引用的环境变量，或其值为空。 |
 | `cannot detect the image store` | 无法通过 `--docker-socket` 访问 dockerd。请启动 dockerd 或显式指定 `--store`。 |
 
-镜像配置不读取或写入状态记录。`--state-dir` 指定备份父目录；`--force`、`--if-managed` 保持接受，不改变安全合并行为。安装和更新使用同一套配置合并逻辑。
+备份存放在当前用户的平台应用目录下的 `backups/`。安装和更新使用同一套安全配置合并逻辑。
+
+客户端命令通过运行中服务的管理 API 获取配置，不再读取服务配置文件。非默认管理端点使用 `--admin-socket` 指定。`serve` 和 `init` 支持通过 `--config` 指定配置文件。

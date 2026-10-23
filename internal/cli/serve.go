@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/runui/oci-mirror-proxy/internal/app"
+	"github.com/runui/oci-mirror-proxy/internal/config"
 )
 
 // cmdServe runs the proxy in the foreground until interrupted.
@@ -25,7 +27,7 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	socket, err := resolveAdminSocket(*adminSocket, path)
+	socket, err := resolveServiceSocket(*adminSocket, path)
 	if err != nil {
 		return err
 	}
@@ -68,4 +70,23 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer) error {
 	}()
 
 	return svc.Serve(ctx, socket)
+}
+
+// Only service startup reads YAML to select its listener. Client discovery must
+// not be reused here: it probes existing services rather than our configuration.
+func resolveServiceSocket(explicit, path string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return "", err
+	}
+	if cfg.Admin.Socket != "" {
+		return cfg.Admin.Socket, nil
+	}
+	if runtime.GOOS != "windows" && path == "/etc/oci-mirror-proxy/config.yaml" {
+		return systemAdminSocket(runtime.GOOS), nil
+	}
+	return config.DefaultAdminSocket()
 }

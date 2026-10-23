@@ -92,7 +92,7 @@ func TestWindowsDefaults(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", os.Getenv("APPDATA"))
 	t.Setenv("ProgramData", t.TempDir())
 	p, err := Defaults()
-	if err != nil || !filepath.IsAbs(p.DaemonJSON) || !filepath.IsAbs(p.StateDir) || p.DockerSocket != `\\.\pipe\dockerDesktopLinuxEngine` {
+	if err != nil || !filepath.IsAbs(p.DaemonJSON) || p.DockerSocket != `\\.\pipe\dockerDesktopLinuxEngine` {
 		t.Fatalf("Desktop defaults: %+v %v", p, err)
 	}
 	p, err = OfflineDefaults(false)

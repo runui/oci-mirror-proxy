@@ -1,5 +1,9 @@
 // Package admin exposes runtime management over a private local IPC endpoint. Access
-// control is file permission on the socket, so no tokens are involved.
+// control uses socket permissions or named-pipe ACLs, so no tokens are involved.
+// Transport owns request bounds and protocol mapping; controllers own storage
+// and runtime changes. Fragment operations expose only config.d raw documents,
+// never arbitrary paths or subscription semantics. Reads remain privileged
+// because configuration may contain credentials. Windows uses named-pipe ACLs.
 package admin
 
 import (

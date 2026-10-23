@@ -27,13 +27,15 @@ func catalogJSON(endpoint string) string {
 
 func TestRemoteLifecycleBackupDedupAndDryRun(t *testing.T) {
 	main := writeConfig(t, config.Default())
+	socket := startTestAPI(t, main)
+	_ = socket
 	originalMain, _ := os.ReadFile(main)
 	var mu sync.Mutex
 	body := catalogJSON("https://mirror.example")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { mu.Lock(); defer mu.Unlock(); io.WriteString(w, body) }))
 	defer server.Close()
 	invoke := func(extra ...string) (int, string, string) {
-		args := []string{"remote", "update", "--config", main, "--url", server.URL, "--no-reload"}
+		args := []string{"remote", "update", "--config", main, "--admin-socket", socket, "--url", server.URL, "--no-reload"}
 		return run(t, append(args, extra...)...)
 	}
 	if code, _, e := invoke("--region", "cn,apac", "--dry-run"); code != 0 {
@@ -57,7 +59,7 @@ func TestRemoteLifecycleBackupDedupAndDryRun(t *testing.T) {
 	if err != nil || len(c.Registries["docker.io"].Upstreams) != 1 {
 		t.Fatalf("%+v %v", c, err)
 	}
-	if code, out, e := run(t, "remote", "list", "--config", main); code != 0 || !strings.Contains(out, server.URL) {
+	if code, out, e := run(t, "remote", "list", "--config", main, "--admin-socket", socket); code != 0 || !strings.Contains(out, server.URL) {
 		t.Fatalf("%d %s %s", code, out, e)
 	}
 	if code, _, e := invoke(); code != 0 {
@@ -88,7 +90,7 @@ func TestRemoteLifecycleBackupDedupAndDryRun(t *testing.T) {
 	if !bytes.Equal(after, second) || !bytes.Equal(backup, first) {
 		t.Fatal("failed download changed current or backup")
 	}
-	if code, _, e := run(t, "remote", "remove", "--config", main, "--url", server.URL, "--no-reload"); code != 0 {
+	if code, _, e := run(t, "remote", "remove", "--config", main, "--admin-socket", socket, "--url", server.URL, "--no-reload"); code != 0 {
 		t.Fatal(e)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -106,12 +108,14 @@ func TestRemoteLifecycleBackupDedupAndDryRun(t *testing.T) {
 
 func TestRemoteSourcesShareURLsAndRemoveIndependently(t *testing.T) {
 	main := writeConfig(t, config.Default())
+	socket := startTestAPI(t, main)
+	_ = socket
 	catalog, err := decodeCatalog([]byte(catalogJSON("https://mirror.example")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, u := range []string{"https://example.com/a.json", "https://example.com/b.json"} {
-		if _, err := editRemote(t.Context(), main, u, []string{"cn"}, catalog, "update", false, false, io.Discard); err != nil {
+		if _, err := editRemoteClient(admin.NewClient(socket), u, []string{"cn"}, catalog, "update", false, false, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -119,7 +123,7 @@ func TestRemoteSourcesShareURLsAndRemoveIndependently(t *testing.T) {
 	if err != nil || len(c.Registries["docker.io"].Upstreams) != 1 {
 		t.Fatalf("%+v %v", c, err)
 	}
-	if _, err := editRemote(t.Context(), main, "https://example.com/a.json", nil, remoteCatalog{}, "remove", false, false, io.Discard); err != nil {
+	if _, err := editRemoteClient(admin.NewClient(socket), "https://example.com/a.json", nil, remoteCatalog{}, "remove", false, false, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	c, err = config.Load(main)
@@ -130,6 +134,8 @@ func TestRemoteSourcesShareURLsAndRemoveIndependently(t *testing.T) {
 
 func TestRemoteAllRegions(t *testing.T) {
 	main := writeConfig(t, config.Default())
+	socket := startTestAPI(t, main)
+	_ = socket
 	var catalog remoteCatalog
 	catalog.Version = 1
 	catalog.Regions = map[string]string{"cn": "China", "eu": "Europe", "global": "Global"}
@@ -145,7 +151,7 @@ func TestRemoteAllRegions(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	args := []string{"remote", "update", "--config", main, "--url", server.URL, "--no-reload"}
+	args := []string{"remote", "update", "--config", main, "--admin-socket", socket, "--url", server.URL, "--no-reload"}
 	check := func(want int, regions string) {
 		t.Helper()
 		cfg, err := config.Load(main)
@@ -155,7 +161,7 @@ func TestRemoteAllRegions(t *testing.T) {
 		if got := len(cfg.Registries["docker.io"].Upstreams); got != want {
 			t.Fatalf("expected %d upstreams, got %d", want, got)
 		}
-		files, err := scanRemotes(main)
+		files, err := scanRemoteClient(admin.NewClient(socket))
 		if err != nil || len(files) != 1 || strings.Join(files[0].meta.Regions, ",") != regions {
 			t.Fatalf("unexpected saved regions: %+v (%v)", files, err)
 		}
@@ -182,20 +188,22 @@ func TestRemoteAllRegions(t *testing.T) {
 }
 
 func TestRemoteBackupFailureDoesNotReplaceCurrent(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "source.yaml")
+	main := writeConfig(t, config.Default())
+	socket := startTestAPI(t, main)
+	client := admin.NewClient(socket)
 	before := []byte("previous")
-	if err := os.WriteFile(path, before, 0o600); err != nil {
+	f, err := client.WriteFragment("source.yaml", "", before)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(path+".bak", 0o700); err != nil {
+	if err := os.Mkdir(filepath.Join(config.DropInDir(main), "source.yaml.bak"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := commitRemote(path, before, []byte("next")); err == nil {
+	if _, err := client.WriteFragment(f.Name, f.Revision, []byte("next")); err == nil {
 		t.Fatal("ignored backup failure")
 	}
-	after, _ := os.ReadFile(path)
-	if !bytes.Equal(after, before) {
+	after, err := client.ReadFragment(f.Name)
+	if err != nil || !bytes.Equal(after.Data, before) {
 		t.Fatal("changed file after failed backup")
 	}
 }
@@ -220,9 +228,11 @@ func TestRemoteStrictCatalogAndURLIdentity(t *testing.T) {
 
 func TestRemoteRepairsMalformedTargetAndKeepsMetadata(t *testing.T) {
 	main := writeConfig(t, config.Default())
+	socket := startTestAPI(t, main)
+	_ = socket
 	u := "https://example.com/catalog.json"
 	catalog, _ := decodeCatalog([]byte(catalogJSON("https://mirror.example")))
-	if _, err := editRemote(t.Context(), main, u, []string{"cn"}, catalog, "update", false, false, io.Discard); err != nil {
+	if _, err := editRemoteClient(admin.NewClient(socket), u, []string{"cn"}, catalog, "update", false, false, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	path, _ := remotePath(main, u)
@@ -231,19 +241,21 @@ func TestRemoteRepairsMalformedTargetAndKeepsMetadata(t *testing.T) {
 	if err := os.WriteFile(path, []byte(lines[0]+"\n\nregistries: [broken"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := editRemote(t.Context(), main, u, nil, catalog, "update", false, false, io.Discard); err != nil {
+	if _, err := editRemoteClient(admin.NewClient(socket), u, nil, catalog, "update", false, false, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestRemoteHeaderRemainsDiscoverableAfterGenericYAMLEdit(t *testing.T) {
 	main := writeConfig(t, config.Default())
+	socket := startTestAPI(t, main)
+	_ = socket
 	u := "https://example.com/catalog.json?token=private"
 	catalog, err := decodeCatalog([]byte(catalogJSON("https://mirror.example")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := editRemote(t.Context(), main, u, []string{"cn"}, catalog, "update", false, false, io.Discard); err != nil {
+	if _, err := editRemoteClient(admin.NewClient(socket), u, []string{"cn"}, catalog, "update", false, false, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	b, err := config.LoadBundle(main)
@@ -256,11 +268,11 @@ func TestRemoteHeaderRemainsDiscoverableAfterGenericYAMLEdit(t *testing.T) {
 	if err := b.Persist(); err != nil {
 		t.Fatal(err)
 	}
-	files, err := scanRemotes(main)
+	files, err := scanRemoteClient(admin.NewClient(socket))
 	if err != nil || len(files) != 1 || files[0].meta.URL != u || strings.Join(files[0].meta.Regions, ",") != "cn" {
 		t.Fatalf("generic YAML write lost managed identity: %+v %v", files, err)
 	}
-	if _, err := editRemote(t.Context(), main, u, nil, catalog, "update", false, false, io.Discard); err != nil {
+	if _, err := editRemoteClient(admin.NewClient(socket), u, nil, catalog, "update", false, false, io.Discard); err != nil {
 		t.Fatalf("could not update edited source: %v", err)
 	}
 }
@@ -292,6 +304,8 @@ func FuzzRemoteJSON(f *testing.F) {
 
 func TestRemoteAllPartialFailureAndEmptyProtection(t *testing.T) {
 	main := writeConfig(t, config.Default())
+	socket := startTestAPI(t, main)
+	_ = socket
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/bad" {
 			http.Error(w, "broken", http.StatusServiceUnavailable)
@@ -302,13 +316,13 @@ func TestRemoteAllPartialFailureAndEmptyProtection(t *testing.T) {
 	defer server.Close()
 	catalog, _ := decodeCatalog([]byte(catalogJSON("https://old.example")))
 	for _, suffix := range []string{"/good", "/bad"} {
-		if _, err := editRemote(t.Context(), main, server.URL+suffix, []string{"cn"}, catalog, "update", false, false, io.Discard); err != nil {
+		if _, err := editRemoteClient(admin.NewClient(socket), server.URL+suffix, []string{"cn"}, catalog, "update", false, false, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 	}
 	badPath, _ := remotePath(main, server.URL+"/bad")
 	before, _ := os.ReadFile(badPath)
-	if code, _, _ := run(t, "remote", "update", "--all", "--config", main, "--no-reload"); code != 1 {
+	if code, _, _ := run(t, "remote", "update", "--all", "--config", main, "--admin-socket", socket, "--no-reload"); code != 1 {
 		t.Fatalf("partial failure exit=%d", code)
 	}
 	goodPath, _ := remotePath(main, server.URL+"/good")
@@ -318,10 +332,10 @@ func TestRemoteAllPartialFailureAndEmptyProtection(t *testing.T) {
 		t.Fatal("partial update did not isolate sources")
 	}
 	empty := remoteCatalog{Version: 1, Regions: map[string]string{"cn": "China"}, Mirrors: []catalogMirror{}}
-	if _, err := editRemote(t.Context(), main, server.URL+"/good", nil, empty, "update", false, false, io.Discard); err == nil {
+	if _, err := editRemoteClient(admin.NewClient(socket), server.URL+"/good", nil, empty, "update", false, false, io.Discard); err == nil {
 		t.Fatal("accepted empty selection")
 	}
-	if _, err := editRemote(t.Context(), main, server.URL+"/good", nil, empty, "update", false, true, io.Discard); err != nil {
+	if _, err := editRemoteClient(admin.NewClient(socket), server.URL+"/good", nil, empty, "update", false, true, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -352,6 +366,8 @@ func TestFetchCatalogCancellationSizeAndRedirectLimit(t *testing.T) {
 
 func TestRemoteReloadAndURLUpstreamCommands(t *testing.T) {
 	main := writeConfig(t, config.Default())
+	socket := startTestAPI(t, main)
+	_ = socket
 	svc, err := app.New(t.Context(), app.Options{ConfigPath: main})
 	if err != nil {
 		t.Fatal(err)
@@ -377,9 +393,9 @@ func TestRemoteReloadAndURLUpstreamCommands(t *testing.T) {
 	}))
 	defer catalog.Close()
 	for _, args := range [][]string{
-		{"remote", "update", "--config", main, "--url", catalog.URL, "--region", "cn", "--admin-socket", sock},
-		{"upstream", "disable", "--config", main, "--url", "https://mirror.example/hub", "--admin-socket", sock},
-		{"remote", "update", "--config", main, "--url", catalog.URL, "--admin-socket", sock},
+		{"remote", "update", "--config", main, "--admin-socket", socket, "--url", catalog.URL, "--region", "cn", "--admin-socket", sock},
+		{"upstream", "disable", "--config", main, "--admin-socket", socket, "--url", "https://mirror.example/hub", "--admin-socket", sock},
+		{"remote", "update", "--config", main, "--admin-socket", socket, "--url", catalog.URL, "--admin-socket", sock},
 	} {
 		if code, _, e := run(t, args...); code != 0 {
 			t.Fatalf("%v: %s", args, e)
@@ -389,23 +405,25 @@ func TestRemoteReloadAndURLUpstreamCommands(t *testing.T) {
 	if err != nil || len(ups) != 1 || !ups[0].Disabled {
 		t.Fatalf("disable not retained: %+v %v", ups, err)
 	}
-	if code, _, e := run(t, "remote", "remove", "--config", main, "--url", catalog.URL, "--admin-socket", sock); code != 0 {
+	if code, _, e := run(t, "remote", "remove", "--config", main, "--admin-socket", socket, "--url", catalog.URL, "--admin-socket", sock); code != 0 {
 		t.Fatal(e)
 	}
 	ups, err = svc.ListUpstreams("docker.io")
 	if err != nil || len(ups) != 0 {
 		t.Fatalf("orphan override: %+v %v", ups, err)
 	}
-	if code, _, e := run(t, "upstream", "add", "--config", main, "--url", "https://manual.example/hub", "--admin-socket", sock); code != 0 {
+	if code, _, e := run(t, "upstream", "add", "--config", main, "--admin-socket", socket, "--url", "https://manual.example/hub", "--admin-socket", sock); code != 0 {
 		t.Fatal(e)
 	}
-	if code, _, e := run(t, "upstream", "remove", "--config", main, "--url", "https://manual.example/hub", "--admin-socket", sock); code != 0 {
+	if code, _, e := run(t, "upstream", "remove", "--config", main, "--admin-socket", socket, "--url", "https://manual.example/hub", "--admin-socket", sock); code != 0 {
 		t.Fatal(e)
 	}
 }
 
 func TestRemoteReloadFailureReportsCommittedFileAndRetryReloads(t *testing.T) {
 	main := writeConfig(t, config.Default())
+	socket := startTestAPI(t, main)
+	_ = socket
 	var reject atomic.Bool
 	reject.Store(true)
 	var reloads atomic.Int32
@@ -419,7 +437,17 @@ func TestRemoteReloadFailureReportsCommittedFileAndRetryReloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	svc, err := app.New(t.Context(), app.Options{ConfigPath: main})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	handler := admin.NewHTTPServer(svc).Handler
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/reload" {
+			handler.ServeHTTP(w, r)
+			return
+		}
 		reloads.Add(1)
 		if reject.Load() {
 			http.Error(w, `{"error":"rejected"}`, 500)
@@ -431,7 +459,7 @@ func TestRemoteReloadFailureReportsCommittedFileAndRetryReloads(t *testing.T) {
 	defer server.Close()
 	catalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, catalogJSON("https://mirror.example")) }))
 	defer catalog.Close()
-	args := []string{"remote", "update", "--config", main, "--url", catalog.URL, "--region", "cn", "--admin-socket", sock}
+	args := []string{"remote", "update", "--config", main, "--admin-socket", socket, "--url", catalog.URL, "--region", "cn", "--admin-socket", sock}
 	if code, _, e := run(t, args...); code != 1 || !strings.Contains(e, "files saved") {
 		t.Fatalf("%d %s", code, e)
 	}

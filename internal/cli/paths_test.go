@@ -55,11 +55,11 @@ func TestResolveAdminSocket(t *testing.T) {
 		name, explicit, path, want string
 		wantErr                    bool
 	}{
-		{name: "configuration", path: path, want: cfg.Admin.Socket},
+		{name: "configuration ignored", path: path, want: fallback},
 		{name: "empty socket uses user default", path: defaultPath, want: fallback},
 		{name: "flag overrides configuration", explicit: "/override.sock", path: path, want: "/override.sock"},
 		{name: "flag bypasses missing configuration", explicit: "/override.sock", path: path + ".missing", want: "/override.sock"},
-		{name: "explicit missing configuration fails", path: path + ".missing", wantErr: true},
+		{name: "missing configuration ignored", path: path + ".missing", want: fallback},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := resolveAdminSocket(tc.explicit, tc.path)
@@ -71,8 +71,8 @@ func TestResolveAdminSocket(t *testing.T) {
 	if err := os.WriteFile(path, []byte("invalid: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolveAdminSocket("", path); err == nil {
-		t.Fatal("invalid configuration must not silently use the default socket")
+	if got, err := resolveAdminSocket("", path); err != nil || got != fallback {
+		t.Fatal("client must not read invalid service configuration")
 	}
 }
 
@@ -86,6 +86,9 @@ func TestInitAdminSocketAndClients(t *testing.T) {
 	if err != nil || cfg.Admin.Socket != socket {
 		t.Fatalf("init configuration: %+v, %v", cfg, err)
 	}
+	if got, err := resolveServiceSocket("", path); err != nil || got != socket {
+		t.Fatalf("service must retain configured listener: %q %v", got, err)
+	}
 	for _, args := range [][]string{
 		{"status"}, {"reload"}, {"upstream", "list"},
 		{"upstream", "add", "--id", "test", "--url", "https://mirror.example.com"},
@@ -93,7 +96,7 @@ func TestInitAdminSocketAndClients(t *testing.T) {
 		{"upstream", "disable", "--id", "test"},
 		{"upstream", "remove", "--id", "test"},
 	} {
-		args = append(args, "--config", path)
+		args = append(args, "--config", path, "--admin-socket", socket)
 		code, _, errOut := run(t, args...)
 		if code != 1 || !strings.Contains(errOut, socket) {
 			t.Fatalf("%v: code %d, stderr %q; want configured socket", args, code, errOut)

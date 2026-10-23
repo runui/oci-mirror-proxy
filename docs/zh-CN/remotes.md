@@ -112,3 +112,5 @@ oci-mirror-proxy upstream enable --url https://docker.example.com
 订阅是信任入口：摘要校验不能证明可变 tag 的解析结果真实或新鲜。
 区域不代表可用性承诺，使用前应查看[镜像目录说明](../../subscriptions/README.zh-CN.md)、
 运营方限制，并检查本地网络的可达性。
+
+订阅的列表、更新和移除需要服务运行，通过管理 API 读写服务的配置片段。自定义端点使用 `--admin-socket`。文件保存与生效分开，reload 失败时保留原运行配置，修复片段后可重试。

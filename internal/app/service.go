@@ -1,5 +1,8 @@
 // Package app wires the components together. It owns the configuration state,
 // the upstream pools and the route table, and it implements the admin controller.
+// Applied configuration and runtime publication belong here. Raw fragment
+// persistence delegates to config without implicit reload. Subscription downloads
+// and catalog interpretation belong to clients, not this service.
 package app
 
 import (

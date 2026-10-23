@@ -508,9 +508,9 @@ function Write-DockerRecovery([string]$Reason) {
     Write-Warning "Proxy installation succeeded, but Docker integration was not completed: $Reason. Docker was not restarted."
     # Literal quoting keeps custom installation paths usable in pasted commands.
     $exe = $destination.Replace("'", "''")
-    $configuration = $Config.Replace("'", "''")
+    $endpoint = $adminPipe.Replace("'", "''")
     Write-Host "Run in an Administrator PowerShell:"
-    Write-Host "  `$info = & '$exe' server info --config '$configuration' --json"
+    Write-Host "  `$info = & '$exe' server info --admin-socket '$endpoint' --json"
     Write-Host "  if (`$LASTEXITCODE -ne 0) { throw 'Could not query server information.' }"
     Write-Host '  [IO.File]::WriteAllText((Join-Path $PWD ''server-info.json''), ($info -join "`n"), (New-Object Text.UTF8Encoding($false)))'
     Write-Host 'Copy server-info.json to the Docker user, then run as that user (not as Administrator):'
@@ -820,7 +820,7 @@ try {
         }
         if (-not $ready) { throw "Service did not become ready. Check $logDir" }
         try {
-            $result = Invoke-InstallerNative $destination @('remote', 'update', '--config', $Config, '--admin-socket', $adminPipe)
+            $result = Invoke-InstallerNative $destination @('remote', 'update', '--admin-socket', $adminPipe)
             Show-NativeResult $result
             if ($result.ExitCode -ne 0) { throw "exit $($result.ExitCode)" }
         } catch { Write-Warning "Remote subscription synchronization failed; retry remote update as Administrator: $_" }
@@ -829,7 +829,7 @@ try {
         # or expose the private service configuration to the Desktop user.
         if (-not $SkipDocker) {
           try {
-            $result = Invoke-InstallerNative $destination @('server', 'info', '--config', $Config, '--admin-socket', $adminPipe, '--json')
+            $result = Invoke-InstallerNative $destination @('server', 'info', '--admin-socket', $adminPipe, '--json')
             if ($result.Stderr) { Write-Host $result.Stderr.TrimEnd() }
             if ($result.ExitCode -ne 0) { throw 'Could not query server information.' }
             $info = $result.Stdout | ConvertFrom-Json -ErrorAction Stop
@@ -859,7 +859,7 @@ try {
         Write-Host 'The binary directory is in system PATH. Open a new terminal to use oci-mirror-proxy as a normal user.'
         Write-Host 'User configuration remains separate; use init and serve as your normal user. Only service administration requires elevation.'
         Write-Host "Manage: Get-Service $ServiceName; Restart-Service $ServiceName; Stop-Service $ServiceName"
-        Write-Host "Admin CLI: & '$destination' status --config '$Config' --admin-socket '$adminPipe'"
+        Write-Host "Admin CLI: & '$destination' status --admin-socket '$adminPipe'"
     }
 } catch {
     $failure = $_
