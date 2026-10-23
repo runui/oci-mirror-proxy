@@ -176,6 +176,9 @@ func resolveAdminSocket(explicit, _ string) (string, error) {
 	var found string
 	for _, endpoint := range candidates {
 		if _, err := admin.NewClient(endpoint).Status(); err != nil {
+			if errors.Is(err, os.ErrPermission) {
+				return "", fmt.Errorf("permission denied accessing admin endpoint %s; update and restart the system service to enable local access, or use the owning account for a private instance: %w", endpoint, err)
+			}
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
 				continue
 			}

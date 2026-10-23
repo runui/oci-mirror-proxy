@@ -653,8 +653,17 @@ if [ -n "$manager" ]; then
             die 'proxy service did not become ready; inspect its service logs'
         fi
     fi
+    # A root health check alone cannot verify the caller's out-of-box access.
+    if [ "$(id -u)" -ne 0 ]; then
+        "$destination" status || die 'service is running but local user access failed'
+    elif [ -n "${SUDO_USER:-}" ] && [ "${SUDO_UID:-0}" != 0 ] &&
+        [ "$(id -u "$SUDO_USER" 2>/dev/null)" = "${SUDO_UID:-}" ] &&
+        [ "$(id -g "$SUDO_USER" 2>/dev/null)" = "${SUDO_GID:-}" ]; then
+        sudo -H -u "$SUDO_USER" -- env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_RUNTIME_DIR \
+            "$destination" status || die 'service is running but local user access failed'
+    fi
     printf 'Service enabled and started (%s). Config: %s\n' "$manager" "$config"
-    printf 'Admin commands: sudo oci-mirror-proxy status --admin-socket %s\n' "$service_socket"
+    printf 'Admin commands: oci-mirror-proxy status\n'
     rollback=false
 elif [ "$update" = true ]; then
     printf 'Configuration preserved. Restart any running proxy service to use the update.\n'

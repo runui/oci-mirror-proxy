@@ -28,9 +28,16 @@ The daemon recreates its socket directory on startup. Older configurations with
 no explicit socket use `/var/run/oci-mirror-proxy/admin.sock` through the service's
 runtime environment.
 
+The standard system administration socket is available to all local users without
+sudo. Its root-owned directory uses mode `0711` and the socket uses mode `0666`;
+these permissions are recreated at each startup. Local users can both inspect
+status and change the proxy configuration through the management API. Do not use
+this system-service mode on hosts with untrusted local accounts. Private instances
+and custom socket paths retain owner-only access.
+
 ```sh
 sudo launchctl print system/com.runui.oci-mirror-proxy
-sudo oci-mirror-proxy status --config /etc/oci-mirror-proxy/config.yaml
+oci-mirror-proxy status
 sudo launchctl kickstart -k system/com.runui.oci-mirror-proxy
 ```
 
@@ -75,9 +82,9 @@ Docker integration:
 export PATH="/usr/local/bin:$PATH"
 ```
 
-If both user and system configurations exist, commands discover the user
-configuration first. To manage the system proxy, explicitly pass
-`--config /etc/oci-mirror-proxy/config.yaml` and use sudo where necessary.
+Client commands discover running services without reading configuration files.
+If both a user instance and the system service are running, select the system
+service with `--admin-socket /var/run/oci-mirror-proxy/admin.sock`.
 
 ## Removing the service
 

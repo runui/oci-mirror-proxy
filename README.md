@@ -214,6 +214,10 @@ Reloads preserve in-flight HTTP transfers and their resume candidates.
   such as `env:NAME` or `file:/path`. Secrets are redacted in logs and in `%v` output.
 - Client `Authorization` headers are never forwarded upstream.
 - The admin socket is protected by file permissions: its directory is `0700`, and
-  the socket is `0600`.
+  the socket is `0600` for private instances. Root services using the standard
+  `/run/oci-mirror-proxy/admin.sock` or `/var/run/oci-mirror-proxy/admin.sock`
+  endpoint allow all local users to access the management API (`0711` directory,
+  `0666` socket), including configuration changes and reloads. Only root can
+  replace the directory or socket; the management API is not exposed over TCP.
 - Mirror configuration is merged from actual files, without installation state.
   Changed files are backed up and atomically replaced; `revert` removes only the selected proxy entries.
