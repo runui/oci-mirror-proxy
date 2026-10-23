@@ -554,6 +554,7 @@ func main() {
 				prefix := filepath.Join(work, "prefix with spaces & unicode 中文")
 				config := filepath.Join(work, "config with spaces", "config.yaml")
 				script := isolateWindowsInstallerPaths(string(original))
+				script = strings.Replace(script, "$env:GOENV = 'off'", "$env:GOENV = 'off'; if ($env:GOPROXY -cne 'https://fixture-proxy.invalid') { throw 'Go proxy configuration was discarded' }", 1)
 				script = regexp.MustCompile(`(?ms)^function Test-IsAdministrator \{.*?^}`).ReplaceAllString(script, `function Test-IsAdministrator { return $$true }`)
 				// Only these platform operations are substituted. Download, checksum,
 				// publication, definition comparison and rollback execute unchanged.
@@ -576,7 +577,7 @@ $ErrorActionPreference = 'Stop'
 $global:fixtureExists = $false
 $global:fixtureStatus = 'Stopped'
 function Invoke-WebRequest {
- param($Uri, $OutFile, [switch]$UseBasicParsing)
+ param($Uri, $OutFile, $Headers, $TimeoutSec, [switch]$UseBasicParsing)
  if ($Uri -like '*WinSW.NET4.exe') {
   [IO.File]::WriteAllText($OutFile, "WinSW fixture` + "`n" + `")
  } else { Microsoft.PowerShell.Utility\Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing }
@@ -603,14 +604,17 @@ function Set-Service { param($Name,$StartupType) Add-Content $env:TEST_LOG "star
 function Start-Sleep { param($Milliseconds) throw 'fixture readiness failed' }
 $params = @{ Prefix=$env:TEST_PREFIX; Config=$env:TEST_CONFIG; Version='vtest'; DownloadBaseUrl=$env:TEST_URL }
 $buildEnvironment = @{}
-foreach ($name in @('GOCACHE','GOMODCACHE','GOPATH','GOTMPDIR','GOENV','GOWORK','GOFLAGS','CGO_ENABLED','GOOS','GOARCH')) { $buildEnvironment[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
+foreach ($name in @('GOCACHE','GOMODCACHE','GOPATH','GOTMPDIR','GOENV','GOWORK','GOFLAGS','CGO_ENABLED','GOOS','GOARCH','GOPROXY','GOSUMDB','GOPRIVATE','GONOPROXY','GONOSUMDB','GOINSECURE','GOTOOLCHAIN')) { $buildEnvironment[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
+$env:GOENV = Join-Path $env:TEMP 'caller-go-env'
+[IO.File]::WriteAllText($env:GOENV, "GOPROXY=https://fixture-proxy.invalid` + "`n" + `")
+Remove-Item Env:GOPROXY -ErrorAction SilentlyContinue
 $env:GOCACHE = Join-Path $env:TEMP 'caller-cache'
 $env:GOMODCACHE = Join-Path $env:TEMP 'caller-modules'
 $env:GOPATH = Join-Path $env:TEMP 'caller-gopath'
 & $env:TEST_INSTALLER @params
 if ($env:GOCACHE -cne (Join-Path $env:TEMP 'caller-cache') -or $env:GOMODCACHE -cne (Join-Path $env:TEMP 'caller-modules') -or $env:GOPATH -cne (Join-Path $env:TEMP 'caller-gopath')) { throw 'Build cache environment was not restored' }
+if (Test-Path Env:GOPROXY) { throw 'Build proxy environment was not restored' }
 foreach ($path in @($env:GOCACHE,$env:GOMODCACHE,$env:GOPATH)) { if (Test-Path -LiteralPath $path) { throw 'Elevated build wrote into caller caches' } }
-foreach ($name in $buildEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name,$buildEnvironment[$name],'Process') }
 if ($env:TEST_SCENARIO -in @('install', 'sync failure', 'info failure', 'invalid info', 'docker failure')) { return }
 $global:fixtureStatus = 'Running'
 Set-Service oci-mirror-proxy Manual
@@ -619,6 +623,8 @@ if ($env:TEST_SCENARIO -eq 'bad wrapper') { [IO.File]::WriteAllText("$env:TEST_P
 [IO.File]::WriteAllText("$env:TEST_PREFIX\bin\oci-mirror-proxy.exe", 'previous binary')
 [IO.File]::WriteAllText($env:TEST_CONFIG, 'preserved config')
 try { & $env:TEST_INSTALLER @params -Update } catch { Write-Output "EXPECTED_FAILURE: $_" }
+if (Test-Path Env:GOPROXY) { throw 'Update proxy environment was not restored' }
+foreach ($name in $buildEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name,$buildEnvironment[$name],'Process') }
 if ($global:fixtureStatus -ne 'Running') { throw 'Previous service was not restored' }
 `
 				// A failed initial install must not first run a successful install.
@@ -897,6 +903,7 @@ foreach ($name in @('Write-DockerRecovery', 'Connect-UserDocker', 'Show-NativeRe
 }
 $SkipDocker = $false; $NoService = $false; $Update = $true
 $binDir = $env:TEMP; $InfoID = 'fixture'; $Config = 'C:\private config\config.yaml'
+$adminPipe = '\\.\pipe\custom-proxy-admin'
 function Fail-Docker { $global:LASTEXITCODE = 17 }
 function Throw-Docker { throw 'Docker unavailable' }
 function Invoke-InstallerNative($Executable, $Arguments) {
@@ -916,8 +923,70 @@ foreach ($failure in @('Fail-Docker', 'Throw-Docker')) {
 			cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", runner)
 			cmd.Env = append(os.Environ(), "TEST_INSTALLER="+installer, "TEMP="+root, "TMP="+root)
 			out, err := cmd.CombinedOutput()
-			if err != nil || !strings.Contains(string(out), "Proxy installation succeeded") || !strings.Contains(string(out), "dockerd apply --server-info server-info.json --verify") {
+			if err != nil || !strings.Contains(string(out), "Proxy installation succeeded") || !strings.Contains(string(out), "dockerd apply --server-info server-info.json --verify") || !strings.Contains(string(out), `\\.\pipe\custom-proxy-admin`) {
 				t.Fatalf("Docker recovery warning: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestWindowsInstallerWrapperDownload(t *testing.T) {
+	for _, shell := range []string{"powershell.exe", "pwsh.exe"} {
+		binary, err := exec.LookPath(shell)
+		if err != nil {
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			installer, err := filepath.Abs(filepath.Join("..", "..", "..", "install.ps1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := windowsInstallerTempDir(t)
+			runner := filepath.Join(root, "wrapper.ps1")
+			if err := os.WriteFile(runner, []byte(`
+$ErrorActionPreference = 'Stop'
+$ast = [Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$null, [ref]$null)
+$fn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Save-ServiceWrapper' }, $true)
+. ([scriptblock]::Create($fn.Extent.Text))
+$path = Join-Path $env:TEMP 'wrapper.exe'
+[IO.File]::WriteAllText($path, 'pinned fixture')
+$wrapperHash = (Get-FileHash -LiteralPath $path).Hash
+function Invoke-WebRequest {
+    param($Uri, $OutFile, $Headers, $TimeoutSec, [switch]$UseBasicParsing)
+    $script:calls++
+    if ($TimeoutSec -ne 30) { throw 'Missing download timeout' }
+    if ($script:mode -eq 'offline') { throw 'Network unavailable' }
+    if ($script:mode -eq 'corrupt') { [IO.File]::WriteAllText($OutFile, 'tampered'); return }
+    if ($Uri -like 'https://github.com/*') { throw 'Release web endpoint unavailable' }
+    if ($Uri -notlike 'https://api.github.com/*' -or $Headers.Accept -ne 'application/octet-stream') { throw 'Wrong official fallback' }
+    [IO.File]::WriteAllText($OutFile, 'pinned fixture')
+}
+$WinSWDownloadBaseUrl = 'https://github.com/winsw/winsw'
+$script:calls = 0; $script:mode = 'fallback'
+Save-ServiceWrapper $path
+if ($calls -ne 2 -or (Get-FileHash -LiteralPath $path).Hash -ne $wrapperHash) { throw 'Official fallback failed' }
+foreach ($base in @('https://github.com/winsw/winsw', 'https://mirror.example/winsw')) {
+    $WinSWDownloadBaseUrl = $base
+    $script:calls = 0; $script:mode = 'offline'
+    try { Save-ServiceWrapper $path; throw 'Offline download accepted' } catch { if ($_ -notlike '*Could not download WinSW after bounded retries*') { throw } }
+    $expected = if ($base -like '*github.com*') { 4 } else { 2 }
+    if ($calls -ne $expected) { throw 'Retry count or custom mirror isolation failed' }
+}
+$script:calls = 0; $script:mode = 'corrupt'
+try { Save-ServiceWrapper $path; throw 'Corrupt download accepted' } catch { if ($_ -notlike '*WinSW SHA256 verification failed*') { throw } }
+if ($calls -ne 1) { throw 'Checksum failure was retried' }
+`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", runner)
+			for _, env := range os.Environ() {
+				if !strings.HasPrefix(strings.ToUpper(env), "PSMODULEPATH=") {
+					cmd.Env = append(cmd.Env, env)
+				}
+			}
+			cmd.Env = append(cmd.Env, "TEST_INSTALLER="+installer, "TEMP="+root, "TMP="+root)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("wrapper download: %v\n%s", err, out)
 			}
 		})
 	}

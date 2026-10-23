@@ -677,3 +677,48 @@ func TestInstallerUninstallRefusesSymlink(t *testing.T) {
 		t.Fatalf("target changed: %v", err)
 	}
 }
+
+func TestInstallerUninstallIgnoresOtherPrefixService(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX shell")
+	}
+	root := t.TempDir()
+	script, err := os.ReadFile(filepath.Join("..", "..", "..", "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolated := string(script)
+	for _, path := range []string{"/etc/systemd/system", "/etc/init.d", "/Library/LaunchDaemons"} {
+		isolated = strings.ReplaceAll(isolated, path, root+path)
+	}
+	prefix := filepath.Join(root, "separate-install")
+	destination := filepath.Join(prefix, "bin", "oci-mirror-proxy")
+	service := filepath.Join(root, "etc", "systemd", "system", "oci-mirror-proxy.service")
+	definition := "[Service]\nExecStart=/other-prefix/bin/oci-mirror-proxy serve --config /other-config.yaml\n"
+	installer := filepath.Join(root, "install.sh")
+	tools := filepath.Join(root, "tools")
+	for path, contents := range map[string]string{
+		destination:                       "separate binary",
+		service:                           definition,
+		installer:                         isolated,
+		filepath.Join(tools, "systemctl"): "#!/bin/sh\necho 'unrelated service must not be managed' >&2\nexit 99\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.CommandContext(t.Context(), "sh", installer, "uninstall", "--prefix", prefix, "--skip-docker")
+	cmd.Env = append(os.Environ(), "PATH="+tools+":"+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("separate uninstall: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("separate binary remains: %v", err)
+	}
+	if contents, err := os.ReadFile(service); err != nil || string(contents) != definition {
+		t.Fatalf("unrelated service changed: %q %v", contents, err)
+	}
+}

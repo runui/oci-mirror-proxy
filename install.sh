@@ -188,6 +188,12 @@ if [ "$action" = uninstall ]; then
             esac
             [ -n "$detected_binary" ] || die "cannot identify managed binary from $candidate"
             case "$detected_binary" in /*/oci-mirror-proxy) ;; *) die 'invalid service executable path' ;; esac
+            # A user-selected prefix may be a separate binary-only installation.
+            # Never stop an unrelated system service while removing that binary.
+            if [ "$explicit_prefix" = true ] && [ "$destination" != "$detected_binary" ]; then
+                detected_binary=
+                continue
+            fi
             if [ "$explicit_prefix" = false ]; then
                 if [ -n "${existing:-}" ] && [ "$destination" != "$detected_binary" ]; then
                     die 'PATH and service select different installations; specify --prefix'

@@ -138,6 +138,7 @@ if ($Command -ne 'uninstall') {
     if ($Version -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._+-]*$') { throw 'Invalid release tag.' }
 }
 if ($ServiceName -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$') { throw 'Invalid service name.' }
+$adminPipe = "\\.\pipe\$ServiceName-admin"
 if ($InfoID -notmatch '^[a-f0-9]{32}$') { throw 'Invalid information handoff ID.' }
 
 function Resolve-InstallPath([string]$Path) {
@@ -267,9 +268,11 @@ function Invoke-InstallerNative([string]$Executable, [string[]]$Arguments) {
         $ErrorActionPreference = 'Continue'
         $PSNativeCommandUseErrorActionPreference = $false
         [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
-        $LASTEXITCODE = $null
+        # Native processes update the global automatic variable. A local variable
+        # would shadow that result and make every successful launch look missing.
+        $global:LASTEXITCODE = $null
         & $Executable @Arguments 1> $stdoutFile 2> $stderrFile
-        $code = $LASTEXITCODE
+        $code = $global:LASTEXITCODE
         $ErrorActionPreference = 'Stop'
         if ($null -eq $code) { throw "Could not start $Executable" }
         $stdout = Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction Stop
@@ -402,6 +405,32 @@ function Protect-ServicePath([string]$Path, [switch]$Directory, [switch]$ReadUse
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
+function Save-ServiceWrapper([string]$Path) {
+    $base = $WinSWDownloadBaseUrl.TrimEnd('/')
+    if ($base -notmatch '^https://') { throw 'WinSWDownloadBaseUrl must use HTTPS.' }
+    $sources = @(@{ Uri = "$base/releases/download/v2.12.0/WinSW.NET4.exe"; Headers = @{} })
+    if ($base -eq 'https://github.com/winsw/winsw') {
+        # The official asset API can remain reachable when the release web URL
+        # fails. Both routes deliver the same pinned file, never an unverified mirror.
+        $sources += @{ Uri = 'https://api.github.com/repos/winsw/winsw/releases/assets/93386825'; Headers = @{ Accept = 'application/octet-stream' } }
+    }
+    $failure = $null
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        foreach ($source in $sources) {
+            try {
+                Invoke-WebRequest -UseBasicParsing -Uri $source.Uri -Headers $source.Headers -TimeoutSec 30 -OutFile $Path
+            } catch {
+                $failure = $_
+                Write-Warning "WinSW download failed; trying another download attempt: $_"
+                continue
+            }
+            if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ne $wrapperHash) { throw 'WinSW SHA256 verification failed.' }
+            return
+        }
+    }
+    throw "Could not download WinSW after bounded retries. Check connectivity or set -WinSWDownloadBaseUrl to an HTTPS repository mirror. Last error: $failure"
+}
+
 function Prepare-Installation {
     $sourceDir = $null
     if ($Build) {
@@ -445,7 +474,8 @@ function Prepare-Installation {
         $binary = Join-Path $tempDir 'oci-mirror-proxy.exe'
         $savedBuildEnv = @{}
         $buildEnvNames = @('CGO_ENABLED', 'GOOS', 'GOARCH')
-        if (-not $NoService) { $buildEnvNames += @('GOCACHE', 'GOMODCACHE', 'GOPATH', 'GOTMPDIR', 'GOENV', 'GOWORK', 'GOFLAGS') }
+        $networkEnvNames = @('GOPROXY', 'GOSUMDB', 'GOPRIVATE', 'GONOPROXY', 'GONOSUMDB', 'GOINSECURE', 'GOTOOLCHAIN')
+        if (-not $NoService) { $buildEnvNames += @('GOCACHE', 'GOMODCACHE', 'GOPATH', 'GOTMPDIR', 'GOENV', 'GOWORK', 'GOFLAGS') + $networkEnvNames }
         foreach ($name in $buildEnvNames) {
             $savedBuildEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         }
@@ -455,6 +485,12 @@ function Prepare-Installation {
             $env:GOOS = 'windows'
             $env:GOARCH = $arch
             if (-not $NoService) {
+                # GOENV=off isolates writable build state, but must not discard
+                # the caller's configured module proxy or private-module policy.
+                $network = Invoke-InstallerNative $go.Source (@('env', '-json') + $networkEnvNames)
+                if ($network.ExitCode -ne 0) { Show-NativeResult $network; throw 'Could not read Go download settings.' }
+                $networkSettings = $network.Stdout | ConvertFrom-Json -ErrorAction Stop
+                foreach ($name in $networkEnvNames) { [Environment]::SetEnvironmentVariable($name, $networkSettings.$name, 'Process') }
                 # Service builds use isolated caches whether launched normally
                 # or from an existing Administrator shell; restore caller env.
                 $env:GOCACHE = Join-Path $tempDir 'gocache'
@@ -499,8 +535,7 @@ function Prepare-Installation {
     }
     if (-not $NoService) {
         $wrapperDownload = Join-Path $tempDir 'WinSW.exe'
-        Invoke-WebRequest -UseBasicParsing -Uri "$WinSWDownloadBaseUrl/releases/download/v2.12.0/WinSW.NET4.exe" -OutFile $wrapperDownload
-        if ((Get-FileHash -LiteralPath $wrapperDownload -Algorithm SHA256).Hash -ne $wrapperHash) { throw 'WinSW SHA256 verification failed.' }
+        Save-ServiceWrapper $wrapperDownload
     }
 }
 
@@ -678,7 +713,6 @@ if (-not $NoService) {
     $wrapper = Join-Path $serviceDir "$ServiceName.exe"
     $serviceFile = Join-Path $serviceDir "$ServiceName.xml"
     $logDir = Join-Path $configDir 'logs'
-    $adminPipe = "\\.\pipe\$ServiceName-admin"
     $definition = New-ServiceDefinition
     $serviceCommand = '"' + $wrapper + '"'
     foreach ($path in @($destination, $wrapper, $serviceFile, $Config, $logDir)) { Assert-NoReparsePoint $path }

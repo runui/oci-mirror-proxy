@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -35,7 +37,21 @@ func Diagnose(ctx context.Context, in DiagnoseInput) []Check {
 	var checks []Check
 
 	if !in.Remove {
-		checks = append(checks, checkProxy(ctx, in.ProxyURL))
+		probeURL := in.ProxyURL
+		if in.MirrorSettings {
+			// Desktop's special DNS name is for the Engine VM, not a reliable
+			// host-side route (Windows can retain a stale hosts-file address).
+			// Probe the local service here; only an actual pull proves VM reachability.
+			if u, err := url.Parse(probeURL); err == nil && u.Hostname() == "host.docker.internal" {
+				port := u.Port()
+				u.Host = "127.0.0.1"
+				if port != "" {
+					u.Host = net.JoinHostPort("127.0.0.1", port)
+				}
+				probeURL = u.String()
+			}
+		}
+		checks = append(checks, checkProxy(ctx, probeURL))
 	}
 
 	if in.InfoErr != nil {

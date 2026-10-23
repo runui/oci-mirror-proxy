@@ -22,6 +22,10 @@ func TestActualConfigLifecycle(t *testing.T) {
 			if err := os.WriteFile(path, original, 0o640); err != nil {
 				t.Fatal(err)
 			}
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
 			a := Applier{BackupDir: filepath.Join(root, "backups")}
 			r := LegacyRenderer{DaemonJSON: path}
 			target := dockerHubTarget()
@@ -41,7 +45,7 @@ func TestActualConfigLifecycle(t *testing.T) {
 				t.Fatal("backup is not original bytes")
 			}
 			info, _ := os.Stat(path)
-			if info.Mode().Perm() != 0o640 {
+			if info.Mode().Perm() != before.Mode().Perm() {
 				t.Fatal("mode changed")
 			}
 			plan, err = r.Render(target, os.ReadFile)

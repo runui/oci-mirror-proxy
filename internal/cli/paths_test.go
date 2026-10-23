@@ -62,7 +62,14 @@ func TestResolveAdminSocket(t *testing.T) {
 		{name: "missing configuration ignored", path: path + ".missing", want: fallback},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveAdminSocket(tc.explicit, tc.path)
+			// Do not discover a real service installed on the test host. The
+			// explicit flag bypasses discovery; otherwise use isolated endpoints.
+			got, err := tc.explicit, error(nil)
+			if tc.explicit != "" {
+				got, err = resolveAdminSocket(tc.explicit, tc.path)
+			} else {
+				got, err = discoverAdminSocket(fallback, []string{filepath.Join(t.TempDir(), "missing.sock")})
+			}
 			if (err != nil) != tc.wantErr || got != tc.want {
 				t.Fatalf("got %q, %v; want %q, error=%v", got, err, tc.want, tc.wantErr)
 			}
@@ -71,7 +78,7 @@ func TestResolveAdminSocket(t *testing.T) {
 	if err := os.WriteFile(path, []byte("invalid: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := resolveAdminSocket("", path); err != nil || got != fallback {
+	if got, err := discoverAdminSocket(fallback, []string{filepath.Join(t.TempDir(), "missing.sock")}); err != nil || got != fallback {
 		t.Fatal("client must not read invalid service configuration")
 	}
 }

@@ -173,6 +173,10 @@ func resolveAdminSocket(explicit, _ string) (string, error) {
 	} else {
 		candidates = append(candidates, systemAdminSocket(runtime.GOOS))
 	}
+	return discoverAdminSocket(user, candidates)
+}
+
+func discoverAdminSocket(user string, candidates []string) (string, error) {
 	var found string
 	for _, endpoint := range candidates {
 		if _, err := admin.NewClient(endpoint).Status(); err != nil {
