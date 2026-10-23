@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -226,6 +227,8 @@ func readServerTarget(flags *dockerFlags) (daemonconf.Target, error) {
 		return daemonconf.Target{}, fmt.Errorf("server information exceeds 1 MiB")
 	}
 	var info admin.Info
+	// Windows PowerShell 5.1 writes a BOM with Set-Content -Encoding UTF8.
+	data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
 	if err := json.Unmarshal(data, &info); err != nil {
 		return daemonconf.Target{}, fmt.Errorf("parse server information: %w", err)
 	}

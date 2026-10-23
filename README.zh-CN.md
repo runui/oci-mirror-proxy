@@ -51,12 +51,12 @@ oci-mirror-proxy version
 curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- update --prefix "$HOME/.local"
 ```
 
-在 Linux 上安装并启动系统服务。仅修改系统时按需请求 sudo，下载和编译以当前用户执行：
+在 Linux 上，以 root 权限运行安装脚本。脚本会启动代理、设置开机自启并自动接入本机 Docker，无需额外配置：
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- --service
+curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- --service
 # 更新系统安装并重启服务：
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- update --prefix /usr/local --service
+curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- update --prefix /usr/local --service
 ```
 
 脚本会下载对应的 Linux、macOS 或 FreeBSD 二进制文件，并校验 SHA256。当没有匹配的二进制文件，或指定了 `--build` 时，会使用 Go 1.26.8 或更新版本（也可通过 Go 工具链自动下载）构建发布源码。使用 `--version v1.0.1` 可选择指定版本。
@@ -72,10 +72,10 @@ Invoke-WebRequest https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/i
 .\install.ps1 update
 ```
 
-安装器会启动 Windows 后台服务、设置开机自启并自动加入 PATH。
+安装器会启动 Windows 后台服务、设置开机自启、自动接入 Docker Desktop 并加入 PATH，无需额外配置 Docker。
 打开新终端后即可直接运行 `oci-mirror-proxy`；更新会保留已有配置。需要 .NET Framework 4.x。
 
-服务管理和 Docker Desktop 接入见[运维指南](docs/zh-CN/operations.md)。
+故障排查与服务管理见[运维指南](docs/zh-CN/operations.md)。
 其他安装选项可运行 `Get-Help .\install.ps1 -Full` 查看。
 
 `--service` 选项支持 Linux 的 systemd/OpenRC 和 macOS 的 launchd 系统服务。
@@ -92,14 +92,15 @@ curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.
 
 ### 更新与卸载
 
-<!-- Keep documentation user-facing and concise. Leave parameter details to
+<!-- Do not remove this comment.
+Keep documentation user-facing and concise. Leave parameter details to
 script help; omit compatibility notes and implementation or testing narratives. -->
 
 ```sh
 sh install.sh update --prefix "$HOME/.local"
-sh install.sh update --prefix /usr/local --service
+sudo sh install.sh update --prefix /usr/local --service
 sh install.sh uninstall --prefix "$HOME/.local"
-sh install.sh uninstall --prefix /usr/local
+sudo sh install.sh uninstall --prefix /usr/local
 ```
 
 ```powershell
@@ -107,8 +108,15 @@ sh install.sh uninstall --prefix /usr/local
 .\install.ps1 uninstall
 ```
 
-卸载保留配置、缓存及日志。如果已启用 Docker 集成，请先以 Docker 用户执行
-`oci-mirror-proxy dockerd revert`（系统 Docker 需要 sudo）。Docker 不会自动重启。
+更新会保留已有配置。如果自动接入 Docker 未能完成，脚本会保留已安装的代理并给出恢复提示。
+Docker 不会自动重启；如需重启，请按脚本输出操作。
+
+支持 Windows PowerShell 5.1 和 PowerShell 7。Registry 兼容性警告本身不表示安装失败：
+Docker Desktop 的镜像加速设置仅支持 Docker Hub，因此可能跳过其他 registry。
+提示等待重启表示配置已保存但尚未生效；安装器不会自动重启 Docker 或中断运行中的容器。
+
+卸载保留配置、缓存及日志。如果检测到需要恢复的 Docker 设置，请按脚本提示处理后重试。
+手动恢复方法见[运维指南](docs/zh-CN/operations.md)。
 
 更多选项见 `sh install.sh --help` 或 `Get-Help .\install.ps1 -Full`。
 

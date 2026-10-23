@@ -63,13 +63,13 @@ Update an existing installation:
 curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- update --prefix "$HOME/.local"
 ```
 
-On Linux, install and start a system service. Only system changes request sudo;
-downloads and builds run as the invoking user:
+On Linux, run the installer with root privileges. It starts the proxy at boot
+and automatically connects local Docker; no separate Docker setup is needed:
 
 ```sh
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --service
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --service
 # Update the system installation and restart its service:
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- update --prefix /usr/local --service
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- update --prefix /usr/local --service
 ```
 
 The script downloads the matching Linux, macOS, or FreeBSD binary and verifies
@@ -110,10 +110,11 @@ Invoke-WebRequest https://github.com/runui/oci-mirror-proxy/raw/refs/heads/maste
 ```
 
 The installer starts the proxy as a Windows service, enables startup at boot,
-and adds the program to PATH. Open a new terminal to run `oci-mirror-proxy`
+automatically connects Docker Desktop, and adds the program to PATH.
+No separate Docker setup is needed. Open a new terminal to run `oci-mirror-proxy`
 directly. Updates preserve existing configuration. .NET Framework 4.x is required.
 
-For service management and Docker Desktop setup, see [operations](docs/operations.md).
+For troubleshooting and service management, see [operations](docs/operations.md).
 For optional installation settings, run `Get-Help .\install.ps1 -Full`.
 
 The `--service` option supports Linux systemd/OpenRC and macOS launchd system
@@ -123,14 +124,15 @@ for service management and recovery from older root-owned user configurations.
 
 ### Update and uninstall
 
-<!-- Keep documentation user-facing and concise. Leave parameter details to
+<!-- Do not remove this comment.
+Keep documentation user-facing and concise. Leave parameter details to
 script help; omit compatibility notes and implementation or testing narratives. -->
 
 ```sh
 sh install.sh update --prefix "$HOME/.local"
-sh install.sh update --prefix /usr/local --service
+sudo sh install.sh update --prefix /usr/local --service
 sh install.sh uninstall --prefix "$HOME/.local"
-sh install.sh uninstall --prefix /usr/local
+sudo sh install.sh uninstall --prefix /usr/local
 ```
 
 ```powershell
@@ -138,12 +140,20 @@ sh install.sh uninstall --prefix /usr/local
 .\install.ps1 uninstall
 ```
 
-Docker setup failures produce a warning and manual recovery commands without
-undoing a successful proxy installation. Docker is not restarted automatically.
+Updates preserve existing configuration. If automatic Docker setup cannot finish,
+the installer keeps the proxy installed and prints recovery instructions.
+Docker is not restarted automatically; if a restart is needed, follow the
+installer's output.
 
-Uninstall preserves configuration, caches and logs. If Docker integration is
-enabled, run `oci-mirror-proxy dockerd revert` as the Docker user first (with sudo
-for system Docker). Docker is not restarted automatically.
+Windows PowerShell 5.1 and PowerShell 7 are supported. Registry compatibility
+warnings do not by themselves indicate installation failure: Docker Desktop
+mirrors only Docker Hub, so other registries may be skipped. A pending restart
+means the settings were saved but are not yet active. The installer does not
+restart Docker or interrupt running containers automatically.
+
+Uninstall preserves configuration, caches and logs. If it detects Docker settings
+that need restoring, follow its instructions before retrying. See
+[operations](docs/operations.md) for manual recovery.
 
 For options, run `sh install.sh --help` or `Get-Help .\install.ps1 -Full`.
 

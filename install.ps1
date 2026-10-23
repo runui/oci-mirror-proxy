@@ -255,9 +255,42 @@ function New-ServiceDefinition {
 "@
 }
 
+function Invoke-InstallerNative([string]$Executable, [string[]]$Arguments) {
+    $capture = Join-Path ([IO.Path]::GetTempPath()) ('oci-native-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $capture -ErrorAction Stop | Out-Null
+    $stdoutFile = Join-Path $capture 'stdout'
+    $stderrFile = Join-Path $capture 'stderr'
+    $savedConsoleEncoding = [Console]::OutputEncoding
+    try {
+        # PS 5.1 wraps native stderr in ErrorRecords; only the process exit code
+        # determines native failure. File operations retain terminating errors.
+        $ErrorActionPreference = 'Continue'
+        $PSNativeCommandUseErrorActionPreference = $false
+        [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+        $LASTEXITCODE = $null
+        & $Executable @Arguments 1> $stdoutFile 2> $stderrFile
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($null -eq $code) { throw "Could not start $Executable" }
+        $stdout = Get-Content -LiteralPath $stdoutFile -Raw -ErrorAction Stop
+        $stderr = Get-Content -LiteralPath $stderrFile -Raw -ErrorAction Stop
+        return [pscustomobject]@{ ExitCode = $code; Stdout = $stdout; Stderr = $stderr }
+    } finally {
+        [Console]::OutputEncoding = $savedConsoleEncoding
+        try { Remove-Item -LiteralPath $capture -Recurse -Force -ErrorAction Stop }
+        catch { Write-Warning "Could not remove native output directory ${capture}: $_" }
+    }
+}
+
+function Show-NativeResult($Result) {
+    if ($Result.Stdout) { Write-Host $Result.Stdout.TrimEnd() }
+    if ($Result.Stderr) { Write-Host $Result.Stderr.TrimEnd() }
+}
+
 function Invoke-WinSW([string]$Command) {
-    & $wrapper $Command
-    if ($LASTEXITCODE -ne 0) { throw "WinSW $Command failed (exit $LASTEXITCODE)." }
+    $result = Invoke-InstallerNative $wrapper @($Command)
+    Show-NativeResult $result
+    if ($result.ExitCode -ne 0) { throw "WinSW $Command failed (exit $($result.ExitCode))." }
 }
 
 function Stop-ProxyService {
@@ -272,9 +305,10 @@ function Stop-ProxyService {
 function Test-ProxyReady {
     # Windows PowerShell 5.1 can turn native stderr into an ErrorRecord. A
     # refused connection while starting is a retry, not an installation error.
-    $ErrorActionPreference = 'Continue'
-    & $destination status --admin-socket $adminPipe *> $null
-    return $LASTEXITCODE -eq 0
+    try {
+        $result = Invoke-InstallerNative $destination @('status', '--admin-socket', $adminPipe)
+        return $result.ExitCode -eq 0
+    } catch { return $false }
 }
 
 function Publish-File([string]$Source, [string]$Destination) {
@@ -431,8 +465,9 @@ function Prepare-Installation {
                 $env:GOWORK = 'off'
                 $env:GOFLAGS = ''
             }
-            & $go.Source build -trimpath -ldflags "-s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version=$Version" -o $binary ./cmd/oci-mirror-proxy
-            if ($LASTEXITCODE -ne 0) { throw "Source build failed (exit $LASTEXITCODE)." }
+            $result = Invoke-InstallerNative $go.Source @('build', '-trimpath', '-ldflags', "-s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version=$Version", '-o', $binary, './cmd/oci-mirror-proxy')
+            Show-NativeResult $result
+            if ($result.ExitCode -ne 0) { throw "Source build failed (exit $($result.ExitCode))." }
             if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Source build did not produce the executable.' }
         } finally {
             Pop-Location
@@ -475,7 +510,9 @@ function Write-DockerRecovery([string]$Reason) {
     $exe = $destination.Replace("'", "''")
     $configuration = $Config.Replace("'", "''")
     Write-Host "Run in an Administrator PowerShell:"
-    Write-Host "  & '$exe' server info --config '$configuration' --json | Set-Content -Encoding UTF8 server-info.json"
+    Write-Host "  `$info = & '$exe' server info --config '$configuration' --json"
+    Write-Host "  if (`$LASTEXITCODE -ne 0) { throw 'Could not query server information.' }"
+    Write-Host '  [IO.File]::WriteAllText((Join-Path $PWD ''server-info.json''), ($info -join "`n"), (New-Object Text.UTF8Encoding($false)))'
     Write-Host 'Copy server-info.json to the Docker user, then run as that user (not as Administrator):'
     Write-Host "  & '$exe' dockerd apply --server-info server-info.json --verify"
     Write-Host '  Remove-Item -LiteralPath server-info.json'
@@ -484,12 +521,17 @@ function Write-DockerRecovery([string]$Reason) {
 function Connect-UserDocker {
     if ($SkipDocker -or $NoService) { return }
     $targetFile = Join-Path $binDir "server-info-$InfoID.json"
+    if (-not (Test-Path -LiteralPath $targetFile -PathType Leaf)) {
+        Write-Host 'Docker integration skipped: server information was not exported; use the recovery instructions from the service stage.'
+        return
+    }
     $arguments = @('dockerd', 'apply', '--server-info', $targetFile, '--verify')
     if ($Update) { $arguments += '--if-managed' }
     try {
-        & $destination @arguments
-        if ($LASTEXITCODE -ne 0) {
-            throw "dockerd apply exited with code $LASTEXITCODE"
+        $result = Invoke-InstallerNative $destination $arguments
+        Show-NativeResult $result
+        if ($result.ExitCode -ne 0) {
+            throw "dockerd apply exited with code $($result.ExitCode)"
         }
     } catch {
         Write-DockerRecovery $_.ToString()
@@ -733,8 +775,9 @@ try {
         Protect-ServicePath $staged -ReadUsers
         if (-not (Test-Path -LiteralPath $Config)) {
             $configCreated = $true
-            & $staged init --config $Config --admin-socket $adminPipe
-            if ($LASTEXITCODE -ne 0) { throw 'Configuration initialization failed.' }
+            $result = Invoke-InstallerNative $staged @('init', '--config', $Config, '--admin-socket', $adminPipe)
+            Show-NativeResult $result
+            if ($result.ExitCode -ne 0) { throw 'Configuration initialization failed.' }
             # Change only the fresh Docker Hub adaptive setting. Existing user
             # configuration, other registries and race settings remain untouched.
             $fresh = [IO.File]::ReadAllText($Config)
@@ -784,18 +827,24 @@ try {
             Start-Sleep -Milliseconds 500
         }
         if (-not $ready) { throw "Service did not become ready. Check $logDir" }
-        & $destination remote update --config $Config --admin-socket $adminPipe
-        if ($LASTEXITCODE -ne 0) { Write-Warning 'Remote subscription synchronization failed; retry remote update as Administrator.' }
+        try {
+            $result = Invoke-InstallerNative $destination @('remote', 'update', '--config', $Config, '--admin-socket', $adminPipe)
+            Show-NativeResult $result
+            if ($result.ExitCode -ne 0) { throw "exit $($result.ExitCode)" }
+        } catch { Write-Warning "Remote subscription synchronization failed; retry remote update as Administrator: $_" }
         # Publish only non-secret renderer inputs in the administrator-owned bin
         # directory. Never write elevated output into the caller's temp directory
         # or expose the private service configuration to the Desktop user.
         if (-not $SkipDocker) {
           try {
-            $target = & $destination server info --config $Config --admin-socket $adminPipe --json
-            if ($LASTEXITCODE -ne 0) { throw 'Could not query server information.' }
+            $result = Invoke-InstallerNative $destination @('server', 'info', '--config', $Config, '--admin-socket', $adminPipe, '--json')
+            if ($result.Stderr) { Write-Host $result.Stderr.TrimEnd() }
+            if ($result.ExitCode -ne 0) { throw 'Could not query server information.' }
+            $info = $result.Stdout | ConvertFrom-Json -ErrorAction Stop
+            if ($info.schema_version -ne 1 -or -not $info.config.proxy_url -or -not $info.config.registries) { throw 'Invalid server information.' }
             $targetFile = Join-Path $binDir "server-info-$InfoID.json"
             Assert-NoReparsePoint $targetFile
-            [IO.File]::WriteAllText($targetFile, ($target -join "`n"), (New-Object Text.UTF8Encoding($false)))
+            [IO.File]::WriteAllText($targetFile, $result.Stdout, (New-Object Text.UTF8Encoding($false)))
             Protect-ServicePath $targetFile -ReadUsers
             # Readers may delete this one-use handoff, but cannot change it or
             # create a replacement in the administrator-owned parent directory.

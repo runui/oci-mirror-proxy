@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   test:
+    name: Windows installer regression
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -22,6 +23,8 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test (including PowerShell installers)
+        env:
+          REQUIRE_WINDOWS_SHELLS: '1'
         run: go test -count=1 -timeout 5m ./...
       - name: Race detector
         run: go test -race -count=1 -timeout 5m ./...

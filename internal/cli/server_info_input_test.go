@@ -147,6 +147,8 @@ func TestServerInfoInputValidation(t *testing.T) {
 		`{"schema_version":1,"config":{"proxy_url":"http://localhost","registries":[]}}`,
 		`{"schema_version":1,"config":{"proxy_url":"http://user:secret@localhost","registries":[{"alias":"docker.io","origin":"https://registry-1.docker.io"}]}}`,
 		`{} {}`,
+		"\xef\xbb\xbf{} {}",
+		"\xef\xbb\xbf" + `{"schema_version":2}`,
 		strings.Repeat(" ", (1<<20)+1),
 	} {
 		file := filepath.Join(t.TempDir(), "info.json")
@@ -159,5 +161,19 @@ func TestServerInfoInputValidation(t *testing.T) {
 	}
 	if _, err := readServerTarget(&dockerFlags{serverInfo: "unused", configPath: "unused"}); err == nil {
 		t.Fatal("ambiguous inputs accepted")
+	}
+}
+
+func TestServerInfoUTF8BOM(t *testing.T) {
+	const data = `{"schema_version":1,"config":{"proxy_url":"http://127.0.0.1:24817","registries":[{"alias":"docker.io","origin":"https://registry-1.docker.io"}]}}`
+	for _, prefix := range []string{"", "\xef\xbb\xbf"} {
+		file := filepath.Join(t.TempDir(), "info.json")
+		if err := os.WriteFile(file, []byte(prefix+data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		target, err := readServerTarget(&dockerFlags{serverInfo: file})
+		if err != nil || target.ProxyURL != "http://127.0.0.1:24817" || len(target.Routes) != 1 {
+			t.Fatalf("prefix %q: target = %+v, error = %v", prefix, target, err)
+		}
 	}
 }

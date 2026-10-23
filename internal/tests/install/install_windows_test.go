@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Keep installer integration tests away from the host's persistent environment.
@@ -465,10 +466,17 @@ func main() {
   os.Exit(1)
  case "status":
   if strings.Contains(os.Getenv("TEST_SCENARIO"),"failed") { os.Exit(1) }
- case "remote":
- case "server":
-  fmt.Println("{\"schema_version\":1}")
- case "dockerd":
+  case "remote":
+   fmt.Fprintln(os.Stderr, "warning: subscription diagnostic")
+   if os.Getenv("TEST_SCENARIO")=="sync failure" { os.Exit(17) }
+  case "server":
+   fmt.Fprintln(os.Stderr, "warning: server diagnostic")
+   if os.Getenv("TEST_SCENARIO")=="info failure" { os.Exit(17) }
+   if os.Getenv("TEST_SCENARIO")=="invalid info" { fmt.Println("{}"); return }
+   fmt.Println("{\"schema_version\":1,\"config\":{\"proxy_url\":\"http://127.0.0.1:24817\",\"registries\":[{\"alias\":\"docker.io\",\"origin\":\"https://registry-1.docker.io\"}]}}")
+  case "dockerd":
+   fmt.Fprintln(os.Stderr, "warning: skipping gcr.io")
+   if os.Getenv("TEST_SCENARIO")=="docker failure" { os.Exit(17) }
  default: os.Exit(1)
  }
 }
@@ -539,7 +547,7 @@ func main() {
 		if err != nil {
 			continue
 		}
-		for _, testCase := range []string{"install", "update", "failed install", "failed update", "custom definition", "custom account", "bad wrapper", "build install", "build update", "build failed update"} {
+		for _, testCase := range []string{"install", "sync failure", "info failure", "invalid info", "docker failure", "update", "failed install", "failed update", "custom definition", "custom account", "bad wrapper", "build install", "build update", "build failed update"} {
 			t.Run(shell+"/"+testCase, func(t *testing.T) {
 				scenario := strings.TrimPrefix(testCase, "build ")
 				work := windowsInstallerTempDir(t)
@@ -603,7 +611,7 @@ $env:GOPATH = Join-Path $env:TEMP 'caller-gopath'
 if ($env:GOCACHE -cne (Join-Path $env:TEMP 'caller-cache') -or $env:GOMODCACHE -cne (Join-Path $env:TEMP 'caller-modules') -or $env:GOPATH -cne (Join-Path $env:TEMP 'caller-gopath')) { throw 'Build cache environment was not restored' }
 foreach ($path in @($env:GOCACHE,$env:GOMODCACHE,$env:GOPATH)) { if (Test-Path -LiteralPath $path) { throw 'Elevated build wrote into caller caches' } }
 foreach ($name in $buildEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name,$buildEnvironment[$name],'Process') }
-if ($env:TEST_SCENARIO -eq 'install') { return }
+if ($env:TEST_SCENARIO -in @('install', 'sync failure', 'info failure', 'invalid info', 'docker failure')) { return }
 $global:fixtureStatus = 'Running'
 Set-Service oci-mirror-proxy Manual
 if ($env:TEST_SCENARIO -eq 'custom definition') { Add-Content "$env:TEST_PREFIX\service\oci-mirror-proxy.xml" '<!-- custom -->' }
@@ -654,7 +662,16 @@ if ($global:fixtureStatus -ne 'Running') { throw 'Previous service was not resto
 					if !os.IsNotExist(readErr) || !bytes.Contains(ops, []byte("winsw uninstall")) {
 						t.Fatalf("initial rollback: %q %v\n%s\n%s", installed, readErr, ops, out)
 					}
-				} else if scenario == "install" {
+				} else if scenario == "install" || scenario == "sync failure" || scenario == "info failure" || scenario == "invalid info" || scenario == "docker failure" {
+					if scenario == "install" && bytes.Contains(out, []byte("Proxy installation succeeded")) {
+						t.Fatalf("warning caused a false Docker failure:\n%s", out)
+					}
+					if scenario == "sync failure" && !bytes.Contains(out, []byte("Remote subscription synchronization failed")) {
+						t.Fatalf("missing synchronization warning:\n%s", out)
+					}
+					if (scenario == "info failure" || scenario == "invalid info" || scenario == "docker failure") && bytes.Count(out, []byte("Proxy installation succeeded")) != 1 {
+						t.Fatalf("expected one Docker recovery warning:\n%s", out)
+					}
 					if !matchesPayload || !bytes.Contains(ops, []byte("startup Automatic")) || !bytes.Contains(ops, []byte("start")) {
 						t.Fatalf("install: %v\n%s\n%s", readErr, ops, out)
 					}
@@ -874,7 +891,7 @@ func TestWindowsInstallerDockerFailureWarns(t *testing.T) {
 			if err := os.WriteFile(runner, []byte(`
 $ErrorActionPreference = 'Stop'
 $ast = [Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$null, [ref]$null)
-foreach ($name in @('Write-DockerRecovery', 'Connect-UserDocker')) {
+foreach ($name in @('Write-DockerRecovery', 'Connect-UserDocker', 'Show-NativeResult')) {
     $fn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     . ([scriptblock]::Create($fn.Extent.Text))
 }
@@ -882,6 +899,10 @@ $SkipDocker = $false; $NoService = $false; $Update = $true
 $binDir = $env:TEMP; $InfoID = 'fixture'; $Config = 'C:\private config\config.yaml'
 function Fail-Docker { $global:LASTEXITCODE = 17 }
 function Throw-Docker { throw 'Docker unavailable' }
+function Invoke-InstallerNative($Executable, $Arguments) {
+    & $Executable
+    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Stdout = ''; Stderr = '' }
+}
 foreach ($failure in @('Fail-Docker', 'Throw-Docker')) {
     $destination = $failure
     $target = Join-Path $binDir "server-info-$InfoID.json"
@@ -897,6 +918,99 @@ foreach ($failure in @('Fail-Docker', 'Throw-Docker')) {
 			out, err := cmd.CombinedOutput()
 			if err != nil || !strings.Contains(string(out), "Proxy installation succeeded") || !strings.Contains(string(out), "dockerd apply --server-info server-info.json --verify") {
 				t.Fatalf("Docker recovery warning: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestWindowsNativeFixture(t *testing.T) {
+	if os.Getenv("OCI_NATIVE_FIXTURE") != "1" {
+		return
+	}
+	fmt.Fprint(os.Stdout, "{\"message\":\"native stdout "+"\u4e2d\u6587"+"\"}")
+	fmt.Fprintln(os.Stderr, "warning: native stderr")
+	if os.Getenv("OCI_NATIVE_LARGE") == "1" {
+		fmt.Fprint(os.Stdout, strings.Repeat("o", 128*1024))
+		fmt.Fprint(os.Stderr, strings.Repeat("e", 128*1024))
+	}
+	time.Sleep(25 * time.Millisecond)
+	if marker := os.Getenv("OCI_NATIVE_MARKER"); marker != "" {
+		if err := os.WriteFile(marker, []byte(strings.Join(os.Args, "\n")), 0o600); err != nil {
+			os.Exit(19)
+		}
+	}
+	if os.Getenv("OCI_NATIVE_FAIL") == "1" {
+		os.Exit(17)
+	}
+	os.Exit(0)
+}
+
+func TestWindowsInstallerNativeStderr(t *testing.T) {
+	for _, shell := range []string{"powershell.exe", "pwsh.exe"} {
+		binary, err := exec.LookPath(shell)
+		if err != nil {
+			if os.Getenv("REQUIRE_WINDOWS_SHELLS") == "1" {
+				t.Fatalf("required shell %s: %v", shell, err)
+			}
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			root := windowsInstallerTempDir(t)
+			installer, err := filepath.Abs(filepath.Join("..", "..", "..", "install.ps1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner := filepath.Join(root, "native.ps1")
+			if err := os.WriteFile(runner, []byte(`
+$ErrorActionPreference = 'Stop'
+$ast = [Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$null, [ref]$null)
+foreach ($name in @('Invoke-InstallerNative', 'Show-NativeResult', 'Write-DockerRecovery', 'Connect-UserDocker')) {
+    $fn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+$env:OCI_NATIVE_FIXTURE = '1'
+$env:OCI_NATIVE_MARKER = Join-Path $env:TEMP 'marker'
+$arguments = @('-test.run=^TestWindowsNativeFixture$', '--', 'path with spaces', "single'quote")
+$result = Invoke-InstallerNative $env:TEST_FIXTURE $arguments
+if ($result.ExitCode -ne 0 -or ($result.Stdout | ConvertFrom-Json).message -ne ('native stdout ' + [char]0x4e2d + [char]0x6587) -or $result.Stderr -notmatch 'warning: native stderr') { throw 'Native streams were not isolated' }
+if ($ErrorActionPreference -ne 'Stop') { throw 'Preference leaked' }
+$marker = [IO.File]::ReadAllText($env:OCI_NATIVE_MARKER)
+if (-not $marker.Contains('path with spaces') -or -not $marker.Contains("single'quote")) { throw 'Arguments corrupted' }
+$env:OCI_NATIVE_FAIL = '1'
+$result = Invoke-InstallerNative $env:TEST_FIXTURE $arguments
+if ($result.ExitCode -ne 17) { throw 'Native exit code lost' }
+$env:OCI_NATIVE_LARGE = '1'
+$result = Invoke-InstallerNative $env:TEST_FIXTURE $arguments
+if ($result.Stdout.Length -lt 131072 -or $result.Stderr.Length -lt 131072) { throw 'Large output lost' }
+$env:OCI_NATIVE_LARGE = ''
+$failed = $false
+try { Invoke-InstallerNative (Join-Path $env:TEMP 'missing.exe') @() | Out-Null } catch { $failed = $true }
+if (-not $failed) { throw 'Launch failure was accepted' }
+$env:OCI_NATIVE_FAIL = ''
+$SkipDocker = $false; $NoService = $false; $Update = $false
+$binDir = $env:TEMP; $InfoID = 'native'; $Config = 'private config'
+$destination = $env:TEST_FIXTURE
+$target = Join-Path $binDir 'server-info-native.json'
+[IO.File]::WriteAllText($target, '{}')
+$native = ${function:Invoke-InstallerNative}
+function Invoke-InstallerNative($Executable, $Arguments) {
+    & $native $Executable (@('-test.run=^TestWindowsNativeFixture$', '--') + $Arguments)
+}
+Connect-UserDocker
+if (Test-Path -LiteralPath $target) { throw 'Handoff was not cleaned' }
+if (@(Get-ChildItem -LiteralPath $env:TEMP -Filter 'oci-native-*').Count -ne 0) { throw 'Capture files leaked' }
+`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", runner)
+			cmd.Env = append(os.Environ(), "TEST_INSTALLER="+installer, "TEST_FIXTURE="+fixture, "TEMP="+root, "TMP="+root)
+			out, err := cmd.CombinedOutput()
+			if err != nil || strings.Contains(string(out), "Proxy installation succeeded") {
+				t.Fatalf("native stderr: %v\n%s", err, out)
 			}
 		})
 	}

@@ -78,6 +78,17 @@ jobs:
           name: release-assets
           path: dist
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test Windows native process handling
+        shell: pwsh
+        env:
+          REQUIRE_WINDOWS_SHELLS: '1'
+        run: go test -count=1 -timeout 5m ./internal/tests/install
+
       - name: Test installation, update, and checksum rejection
         shell: pwsh
         env:
