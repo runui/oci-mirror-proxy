@@ -62,6 +62,26 @@ func Decode(data []byte) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
+	// Inspect presence only after strict decoding, and only on the merged
+	// document. A bool's zero value cannot distinguish omission from an
+	// explicit opt-out; defaulting individual fragments would undo opt-outs.
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return Config{}, fmt.Errorf("parse configuration presence: %w", err)
+	}
+	if len(root.Content) == 1 {
+		registries := MappingValue(root.Content[0], "registries")
+		for alias, reg := range c.Registries {
+			node := MappingValue(registries, alias)
+			if MappingValue(MappingValue(node, "race"), "enabled") == nil {
+				reg.Race.Enabled = true
+			}
+			if MappingValue(MappingValue(node, "adaptive"), "enabled") == nil {
+				reg.Adaptive.Enabled = true
+			}
+			c.Registries[alias] = reg
+		}
+	}
 	c.ApplyDefaults()
 	if err := c.Validate(); err != nil {
 		return Config{}, err

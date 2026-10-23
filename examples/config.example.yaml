@@ -28,9 +28,9 @@ registries:
     # Hedged requests. Off by default, because racing sends extra requests to
     # the upstreams and Docker Hub enforces pull rate limits.
     race:
-      enabled: false
+      enabled: true
       delay: 500ms        # start another upstream if nothing answered within this time
-      max_parallel: 2     # never more than this many attempts in flight
+      max_parallel: 3     # never more than this many attempts in flight
 
     # Per-upstream circuit breaker.
     breaker:
@@ -40,7 +40,7 @@ registries:
     # Experimental. Probe alternate Range-capable sources during slow blob reads.
     # Background probes sample up to 512 KiB and must be at least 25% faster.
     adaptive:
-      enabled: false
+      enabled: true
       window: 10s
       min_bytes_per_second: 262144
       probe_timeout: 5s

@@ -112,6 +112,9 @@ func TestDeliveryPolicyReloadKeepsDispatcherSnapshot(t *testing.T) {
 	// Distinct path prefixes are distinct upstream URLs; duplicate URLs are
 	// intentionally merged into one candidate by configuration loading.
 	cfg := baseConfig(upstreamFor("primary", registry.URL), upstreamFor("alternate", registry.URL+"/alternate"))
+	initial := cfg.Registries["docker.io"]
+	initial.Adaptive.Enabled = false // Exercise an explicit opt-out before reload.
+	cfg.Registries["docker.io"] = initial
 	svc, path := newService(t, cfg)
 	old, _ := svc.table.Lookup("docker.io")
 	reg := cfg.Registries["docker.io"]
@@ -170,7 +173,7 @@ func TestConfiguredLogLevelReloadAndRouting(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	for _, want := range []string{"request_id=", `msg="route selected"`, "strategy=sequential", `msg="upstream attempt failed"`, "status=404", `msg="upstream hit"`, `msg="upstream selected"`, "upstream=healthy", "via=" + healthy.URL} {
+	for _, want := range []string{"request_id=", `msg="route selected"`, "strategy=hedged", `msg="upstream attempt failed"`, "status=404", `msg="upstream hit"`, `msg="upstream selected"`, "upstream=healthy", "via=" + healthy.URL} {
 		if !strings.Contains(logs.String(), want) {
 			t.Fatalf("missing %q in logs:\n%s", want, logs.String())
 		}

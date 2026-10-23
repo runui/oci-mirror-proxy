@@ -66,6 +66,15 @@ type trackedCandidate struct {
 	response *Result
 }
 
+// Preserve endpoint identity when wrapping candidates so enabling adaptive
+// delivery does not remove the selected mirror URL from routing diagnostics.
+func (c *trackedCandidate) URL() string {
+	if endpoint, ok := c.Candidate.(interface{ URL() string }); ok {
+		return endpoint.URL()
+	}
+	return ""
+}
+
 func (c *trackedCandidate) Retain() {
 	if owner, ok := c.Candidate.(interface{ Retain() }); ok {
 		owner.Retain()

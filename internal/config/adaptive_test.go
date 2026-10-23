@@ -8,7 +8,7 @@ import (
 func TestAdaptiveDefaultsAndValidation(t *testing.T) {
 	c := Default()
 	r := c.Registries["docker.io"]
-	if r.Adaptive.Enabled || r.Adaptive.Window != 10*time.Second || r.Adaptive.ProbeTimeout != 5*time.Second || r.Adaptive.MinBytesPerSecond != 262144 || r.Adaptive.MaxSwitches != 3 {
+	if !r.Adaptive.Enabled || r.Adaptive.Window != 10*time.Second || r.Adaptive.ProbeTimeout != 5*time.Second || r.Adaptive.MinBytesPerSecond != 262144 || r.Adaptive.MaxSwitches != 3 {
 		t.Fatalf("defaults=%+v", r.Adaptive)
 	}
 	r.Adaptive.Enabled = true

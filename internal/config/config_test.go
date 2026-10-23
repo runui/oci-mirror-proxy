@@ -59,8 +59,8 @@ func TestDefaultIsValid(t *testing.T) {
 	if reg.Origin != "https://registry-1.docker.io" {
 		t.Errorf("docker.io origin = %q", reg.Origin)
 	}
-	if reg.Race.Enabled {
-		t.Error("racing must be disabled by default")
+	if !reg.Race.Enabled {
+		t.Error("racing must be enabled by default")
 	}
 }
 

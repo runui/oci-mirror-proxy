@@ -772,13 +772,6 @@ try {
             Write-Host 'Proxy listens on all IPv4 interfaces; firewall policy controls LAN access.'
             Show-NativeResult $result
             if ($result.ExitCode -ne 0) { throw 'Configuration initialization failed.' }
-            # Change only the fresh Docker Hub adaptive setting. Existing user
-            # configuration, other registries and race settings remain untouched.
-            $fresh = [IO.File]::ReadAllText($Config)
-            $pattern = '(?ms)(^  docker\.io:\r?\n(?:(?!^  \S).)*?^    adaptive:\r?\n(?:(?!^    \S).)*?^      enabled:) false'
-            $updated = [regex]::Replace($fresh, $pattern, '${1} true')
-            if ($updated -ceq $fresh) { throw 'Fresh Docker Hub adaptive setting was not found.' }
-            [IO.File]::WriteAllText($Config, $updated, (New-Object Text.UTF8Encoding($false)))
         }
         if ($existingService) {
             $wasRunning = (Get-Service -Name $ServiceName).Status -ne 'Stopped'

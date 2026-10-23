@@ -1,8 +1,8 @@
-# Experimental adaptive blob downloads
+# Adaptive blob downloads
 
-Enable `registries.<alias>.adaptive.enabled` to probe alternate upstreams when
+`registries.<alias>.adaptive.enabled` defaults to true and probes alternate upstreams when
 whole-blob GET throughput falls below `min_bytes_per_second` over `window`.
-Defaults are disabled, 262144 bytes/s, 10s, a 5s per-candidate `probe_timeout`,
+Defaults are enabled, 262144 bytes/s, 10s, a 5s per-candidate `probe_timeout`,
 and 3 `max_switches` probe rounds. Client Range requests are unchanged.
 
 The original body remains open while probing. A replacement must return 206,
@@ -67,7 +67,7 @@ Logs showed alternates rejected because their samples were not sufficiently
 faster. No successful public-source switch was observed. Raw results are retained
 at `/DATA/oci-adaptive-test.UqdfEE/results-v3.json`.
 
-Keep the feature opt-in. Controlled tests establish protocol continuity and
+The feature now defaults to enabled; set `adaptive.enabled: false` to opt out. Controlled tests establish protocol continuity and
 recovery, not improved performance across arbitrary public mirrors. Production
 Docker configuration and the production proxy binary were not changed. There is
 no new on-disk format or state: rollback is disabling `adaptive.enabled` and

@@ -59,7 +59,7 @@ internal/cache              reserved extension point for a blob cache (interface
 **Sequential** (default): one upstream at a time, in configured order. The next
 one is contacted only after the previous one has failed.
 
-**Hedged** (opt-in): the first upstream starts immediately. Whenever `race.delay`
+**Hedged** (default): the first upstream starts immediately. Whenever `race.delay`
 passes with no answer, another upstream is started, up to `race.max_parallel` in
 flight. A failed attempt starts the next upstream immediately. The first
 acceptable response wins, and the other attempts are cancelled.

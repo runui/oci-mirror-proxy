@@ -492,8 +492,9 @@ esac
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !cfg.Registries["docker.io"].Adaptive.Enabled {
-					t.Fatal("missing docker.io adaptive default")
+				reg := cfg.Registries["docker.io"]
+				if !reg.Adaptive.Enabled || !reg.Race.Enabled || reg.Race.MaxParallel != 3 {
+					t.Fatal("missing acceleration defaults")
 				}
 				info, err := os.Stat(systemConfig)
 				if err != nil || info.Mode().Perm() != 0o600 {

@@ -38,7 +38,7 @@ const (
 
 const (
 	defaultRaceDelay        = 500 * time.Millisecond
-	defaultRaceParallel     = 2
+	defaultRaceParallel     = 3
 	defaultBreakerThreshold = 3
 	defaultBreakerCooldown  = 30 * time.Second
 	defaultConnect          = 10 * time.Second
@@ -132,7 +132,7 @@ type TLS struct {
 
 // Default returns a fresh configuration with the built-in defaults applied.
 func Default() Config {
-	c := Config{Registries: map[string]Registry{ociapi.DefaultAlias: {}}}
+	c := Config{Registries: map[string]Registry{ociapi.DefaultAlias: {Race: Race{Enabled: true}, Adaptive: Adaptive{Enabled: true}}}}
 	c.ApplyDefaults()
 	return c
 }

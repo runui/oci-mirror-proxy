@@ -73,21 +73,6 @@ init_config() {
     init_path=$1
     shift
     run_config "$destination" init --config "$init_path" "$@" || return 1
-    # Only edit the freshly generated docker.io setting, not other registries or race.enabled.
-    run_config sh -c '
-    adaptive_config=$(mktemp "$(dirname -- "$1")/.config.yaml.XXXXXXXX") || exit 1
-    if awk '\''
-        /^  [^ ]/ { docker = ($0 == "  docker.io:"); adaptive = 0 }
-        /^    [^ ]/ { adaptive = (docker && $0 == "    adaptive:") }
-        adaptive && /^      enabled:/ { $0 = "      enabled: true"; updated = 1 }
-        { print }
-        END { if (!updated) exit 1 }
-    '\'' "$1" > "$adaptive_config" && mv -f "$adaptive_config" "$1"; then
-        exit 0
-    fi
-    rm -f "$adaptive_config"
-    exit 1
-    ' sh "$init_path"
 }
 
 sync_remote() {

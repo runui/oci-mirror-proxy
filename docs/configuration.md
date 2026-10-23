@@ -65,15 +65,15 @@ Each key under `registries` is a registry alias:
 | Key | Default | Description |
 |---|---|---|
 | `origin` | `https://registry-1.docker.io` for `docker.io`, otherwise `https://<alias>` | Official endpoint. dockerd falls back to it when the proxy cannot serve a request. |
-| `race.enabled` | `false` | Enable hedged requests for this registry. |
+| `race.enabled` | `true` | Enable hedged requests for this registry. |
 | `race.delay` | `500ms` | With racing on, start another upstream if nothing has answered within this time. Must be positive. |
-| `race.max_parallel` | `2` | Maximum concurrent attempts per request. Must be at least 2 when racing is on. |
+| `race.max_parallel` | `3` | Maximum concurrent attempts per request. Must be at least 2 when racing is on. |
 | `breaker.threshold` | `3` | Consecutive failures before an upstream is skipped. |
 | `breaker.cooldown` | `30s` | How long a skipped upstream stays out of rotation before one probe request is tried. |
 | `upstreams` | `[]` | Ordered list of upstreams. Earlier entries are tried first. |
 
 Racing sends extra requests to the upstreams. Docker Hub enforces pull rate limits,
-so racing is off by default and should be enabled deliberately.
+so racing uses a bounded default of three concurrent attempts. Set `race.enabled: false` to opt out.
 
 ## Upstreams
 
@@ -135,3 +135,8 @@ after that delay.
 - **In-flight transfers**: reload does not interrupt existing HTTP requests or
   change their resume candidates. Later HTTP requests, including those in the
   same `docker pull`, use the new configuration.
+
+Adaptive blob switching is enabled by default (10s window, 262144 bytes/s minimum,
+5s probe timeout, 3 probe rounds). Set `adaptive.enabled: false` to disable it.
+Interrupted blob downloads resume automatically. These features do not split a
+blob into parallel chunks or change Docker layer-download concurrency.

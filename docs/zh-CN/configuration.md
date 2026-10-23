@@ -49,14 +49,14 @@
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | `origin` | `docker.io` 为 `https://registry-1.docker.io`，其他为 `https://<alias>` | 官方仓库地址。代理无法处理请求时，dockerd 回退至此。 |
-| `race.enabled` | `false` | 为此仓库启用对冲请求。 |
+| `race.enabled` | `true` | 为此仓库启用对冲请求。 |
 | `race.delay` | `500ms` | 启用竞速后，在此时间内未收到响应则启动另一个上游请求。必须为正值。 |
-| `race.max_parallel` | `2` | 每个请求的最大并发尝试数。启用竞速时至少为 2。 |
+| `race.max_parallel` | `3` | 每个请求的最大并发尝试数。启用竞速时至少为 2。 |
 | `breaker.threshold` | `3` | 连续失败多少次后跳过该上游。 |
 | `breaker.cooldown` | `30s` | 上游被跳过后，等待多久再允许一次探测请求。 |
 | `upstreams` | `[]` | 有序上游列表，排在前面的优先尝试。 |
 
-竞速会向上游发送额外请求。Docker Hub 有拉取频率限制，因此默认关闭竞速，请按需启用。
+竞速默认开启，最多并发尝试 3 个上游。额外请求可能触发上游限流；可设置 `race.enabled: false` 关闭。
 
 ## 上游镜像源
 
@@ -103,3 +103,8 @@
 - **手动编辑**：修改文件后，执行 `oci-mirror-proxy reload` 或向进程发送 `SIGHUP`。验证失败的文件会被拒绝，继续使用原有运行配置。
 - **监听地址**：修改 `listen` 后会记录日志，重启后才生效。
 - **正在传输的请求**：重载不打断已有 HTTP 请求，也不改变其续传候选。同一次 `docker pull` 中之后新发起的 HTTP 请求使用新配置。
+
+Adaptive blob switching is enabled by default (10s window, 262144 bytes/s minimum,
+5s probe timeout, 3 probe rounds). Set `adaptive.enabled: false` to disable it.
+Interrupted blob downloads resume automatically. These features do not split a
+blob into parallel chunks or change Docker layer-download concurrency.
