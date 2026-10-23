@@ -51,12 +51,12 @@ oci-mirror-proxy version
 curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- update --prefix "$HOME/.local"
 ```
 
-在 Linux 上，以 root 权限安装并启动系统服务：
+在 Linux 上安装并启动系统服务。仅修改系统时按需请求 sudo，下载和编译以当前用户执行：
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- --service
+curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- --service
 # 更新系统安装并重启服务：
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- update --prefix /usr/local --service
+curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- update --prefix /usr/local --service
 ```
 
 脚本会下载对应的 Linux、macOS 或 FreeBSD 二进制文件，并校验 SHA256。当没有匹配的二进制文件，或指定了 `--build` 时，会使用 Go 1.26.8 或更新版本（也可通过 Go 工具链自动下载）构建发布源码。使用 `--version v1.0.1` 可选择指定版本。
@@ -97,9 +97,9 @@ script help; omit compatibility notes and implementation or testing narratives. 
 
 ```sh
 sh install.sh update --prefix "$HOME/.local"
-sudo sh install.sh update --prefix /usr/local --service
+sh install.sh update --prefix /usr/local --service
 sh install.sh uninstall --prefix "$HOME/.local"
-sudo sh install.sh uninstall --prefix /usr/local
+sh install.sh uninstall --prefix /usr/local
 ```
 
 ```powershell

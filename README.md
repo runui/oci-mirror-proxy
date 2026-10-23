@@ -63,12 +63,13 @@ Update an existing installation:
 curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- update --prefix "$HOME/.local"
 ```
 
-On Linux, install and start a system service with root privileges:
+On Linux, install and start a system service. Only system changes request sudo;
+downloads and builds run as the invoking user:
 
 ```sh
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --service
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --service
 # Update the system installation and restart its service:
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- update --prefix /usr/local --service
+curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- update --prefix /usr/local --service
 ```
 
 The script downloads the matching Linux, macOS, or FreeBSD binary and verifies
@@ -127,15 +128,18 @@ script help; omit compatibility notes and implementation or testing narratives. 
 
 ```sh
 sh install.sh update --prefix "$HOME/.local"
-sudo sh install.sh update --prefix /usr/local --service
+sh install.sh update --prefix /usr/local --service
 sh install.sh uninstall --prefix "$HOME/.local"
-sudo sh install.sh uninstall --prefix /usr/local
+sh install.sh uninstall --prefix /usr/local
 ```
 
 ```powershell
 .\install.ps1 update
 .\install.ps1 uninstall
 ```
+
+Docker setup failures produce a warning and manual recovery commands without
+undoing a successful proxy installation. Docker is not restarted automatically.
 
 Uninstall preserves configuration, caches and logs. If Docker integration is
 enabled, run `oci-mirror-proxy dockerd revert` as the Docker user first (with sudo

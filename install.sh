@@ -17,7 +17,7 @@ Options:
   --version TAG  Install this release tag (default: VERSION environment or latest).
   --build        Compile release source instead of downloading a binary.
   --update       Replace the binary found in PATH, unless --prefix is supplied.
-  --service      Install and start a systemd/OpenRC/launchd service (requires root).
+  --service      Install and start a systemd/OpenRC/launchd service (sudo as needed).
   --skip-docker  Skip Docker setup or the uninstall managed-state safety check.
                  Binary-only installs always skip Docker setup.
                  Service installs apply local Docker settings without restarting
@@ -33,7 +33,7 @@ Environment:
 Detects the current OS and architecture and verifies release SHA256 checksums.
 Falls back to building release source when no matching binary is published.
 Source builds require Go 1.26.8 or newer (or Go toolchain auto-download).
-Requires curl, tar and write access to the destination; never invokes sudo.
+Requires curl and tar. Only system changes request sudo; downloads and builds do not.
 Configuration is preserved; services are only restarted with --service.
 EOF
 }
@@ -43,8 +43,26 @@ die() {
     exit 1
 }
 
+# Keep downloads/builds in the caller's account. Only operations on the selected
+# installation or system service cross this boundary; never evaluate shell text.
+run_system() {
+    if [ "$needs_sudo" = true ]; then sudo -- "$@"; else "$@"; fi
+}
+
+run_docker_user() {
+    if [ "$(id -u)" -eq 0 ]; then
+        sudo -H -u "$docker_user" -- "$@"
+    else
+        "$@"
+    fi
+}
+
 run_config() {
-    if [ -n "$config_user" ]; then
+    if [ "$manager" = launchd ]; then
+        run_system env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME HOME=/var/root XDG_RUNTIME_DIR=/var/run "$@"
+    elif [ -n "$manager" ]; then
+        run_system "$@"
+    elif [ -n "$config_user" ]; then
         sudo -H -u "$config_user" -- env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_RUNTIME_DIR HOME="$config_home" "$@"
     else
         "$@"
@@ -110,7 +128,7 @@ sync_remote() {
             fi
         fi
     fi
-    if [ ! -e "$sync_config" ] && [ ! -L "$sync_config" ]; then
+    if ! run_config test -e "$sync_config" && ! run_config test -L "$sync_config"; then
         init_config "$sync_config" || return 1
     fi
     run_config "$destination" remote update --config "$sync_config" "$@"
@@ -195,13 +213,14 @@ destination="$bin_dir/oci-mirror-proxy"
 [ ! -L "$destination" ] || die "refusing to replace symlink $destination; specify the real installation prefix"
 
 manager=
+needs_sudo=false
 config_user=
 config_home=
 sync_skip=
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 # Detect definitions even when their manager is not running. Never delete a
 # binary while leaving an undiscovered service pointing at it.
-    if [ "$action" = uninstall ]; then
+if [ "$action" = uninstall ]; then
     detected_binary=
     for candidate in /etc/systemd/system/oci-mirror-proxy.service /etc/init.d/oci-mirror-proxy /Library/LaunchDaemons/com.runui.oci-mirror-proxy.plist; do
         if [ -e "$candidate" ] || [ -L "$candidate" ]; then
@@ -224,15 +243,11 @@ os=$(uname -s | tr '[:upper:]' '[:lower:]')
             service=true
         fi
     done
-    # Binary-only installs can still have manually enrolled system Docker.
-    if [ "$os" = linux ] && [ "$skip_docker" = false ] && [ -e /var/lib/oci-mirror-proxy/dockerd-state.json ]; then
-        die 'system Docker integration is managed; revert it manually first or use --skip-docker'
-    fi
 fi
 # A privileged binary install must not create private root-owned files in the
 # invoking user's home. Resolve the account rather than trusting inherited HOME.
 if [ "$service" = false ] && [ "$(id -u)" -eq 0 ]; then
-    if [ -n "${SUDO_USER:-}${SUDO_UID:-}" ]; then
+    if [ -n "${SUDO_USER:-}${SUDO_UID:-}" ] && [ "${SUDO_UID:-}" != 0 ]; then
         if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_UID:-0}" != 0 ] &&
             [ "$(id -u "$SUDO_USER" 2>/dev/null)" = "${SUDO_UID:-}" ] &&
             [ "$(id -g "$SUDO_USER" 2>/dev/null)" = "${SUDO_GID:-}" ] && command -v sudo >/dev/null 2>&1; then
@@ -254,7 +269,10 @@ if [ "$service" = false ] && [ "$(id -u)" -eq 0 ]; then
 fi
 if [ "$service" = true ]; then
     case "$os" in linux|darwin) ;; *) die '--service requires Linux or macOS' ;; esac
-    [ "$(id -u)" -eq 0 ] || die '--service requires root; rerun as root (sudo is not invoked automatically)'
+    if [ "$(id -u)" -ne 0 ]; then
+        command -v sudo >/dev/null 2>&1 || die 'system service management requires sudo or a root session'
+        needs_sudo=true
+    fi
     # Service definitions interpret paths themselves; only accept literal safe paths.
     case "$destination" in
         *[!a-zA-Z0-9/._+-]*) die '--service requires an installation path without spaces or special characters' ;;
@@ -278,17 +296,33 @@ if [ "$service" = true ]; then
     fi
 fi
 
+if [ "$needs_sudo" = false ] && [ "$(id -u)" -ne 0 ]; then
+    writable_parent=$bin_dir
+    while [ ! -e "$writable_parent" ] && [ ! -L "$writable_parent" ]; do writable_parent=$(dirname -- "$writable_parent"); done
+    if [ ! -w "$writable_parent" ]; then
+        command -v sudo >/dev/null 2>&1 || die "cannot write $bin_dir; use --prefix \"\$HOME/.local\" or install sudo"
+        needs_sudo=true
+    fi
+fi
+
 # Docker Desktop belongs to the invoking user, not the root service account.
 # Resolve that identity before launchd normalizes HOME for the daemon commands.
 docker_user=
 docker_home=
 docker_identity_error=
 docker_endpoint=
-if [ "$service" = true ] && [ "$os" = linux ] && [ "$skip_docker" = false ] && [ -n "${SUDO_USER:-}" ]; then
+if [ "$service" = true ] && [ "$os" = linux ] && [ "$skip_docker" = false ]; then
     # sudo normally changes HOME, hiding the caller's active Docker context.
     # Resolve it as the caller instead of silently enrolling a different engine.
-    if [ "${SUDO_UID:-0}" != 0 ] &&
-        [ "$(id -u "$SUDO_USER" 2>/dev/null)" = "${SUDO_UID:-}" ] &&
+    # Root invoking sudo is valid too; validate the account, not a nonzero UID.
+    if [ "$(id -u)" -ne 0 ] || [ -z "${SUDO_USER:-}" ]; then
+        if [ -n "${DOCKER_HOST:-}" ] && [ -z "${DOCKER_CONTEXT:-}" ]; then
+            docker_endpoint=$DOCKER_HOST
+        else
+            docker_endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}') ||
+                docker_identity_error='cannot inspect the Docker context'
+        fi
+    elif [ "$(id -u "$SUDO_USER" 2>/dev/null)" = "${SUDO_UID:-}" ] &&
         [ "$(id -g "$SUDO_USER" 2>/dev/null)" = "${SUDO_GID:-}" ]; then
         if [ -n "${DOCKER_HOST:-}" ] && [ -z "${DOCKER_CONTEXT:-}" ]; then
             docker_endpoint=$DOCKER_HOST
@@ -296,15 +330,18 @@ if [ "$service" = true ] && [ "$os" = linux ] && [ "$skip_docker" = false ] && [
             docker_endpoint=$(sudo -H -u "$SUDO_USER" -- docker context inspect --format '{{.Endpoints.docker.Host}}') ||
                 docker_identity_error='cannot inspect the invoking user Docker context'
         fi
-        case "$docker_endpoint" in
-            unix:///run/user/*) docker_identity_error='automatic system service enrollment does not support rootless Docker; configure it as the Docker user' ;;
-        esac
     else
         docker_identity_error='cannot validate the invoking Docker user'
     fi
+    case "$docker_endpoint" in
+        unix:///run/user/*) docker_identity_error='automatic system service enrollment does not support rootless Docker; configure it as the Docker user' ;;
+    esac
 fi
 if [ "$service" = true ] && [ "$os" = darwin ] && [ "$skip_docker" = false ]; then
-    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_UID:-0}" != 0 ] &&
+    if [ "$(id -u)" -ne 0 ]; then
+        docker_user=$(id -un)
+        docker_home=$HOME
+    elif [ -n "${SUDO_USER:-}" ] && [ "${SUDO_UID:-0}" != 0 ] &&
         [ "$(id -u "$SUDO_USER" 2>/dev/null)" = "${SUDO_UID:-}" ] &&
         [ "$(id -g "$SUDO_USER" 2>/dev/null)" = "${SUDO_GID:-}" ] && command -v sudo >/dev/null 2>&1; then
         docker_user=$SUDO_USER
@@ -319,31 +356,41 @@ build_dir=$(mktemp -d "${TMPDIR:-/tmp}/oci-mirror-proxy-install.XXXXXXXX")
 staged_binary=
 rollback=false
 cleanup() {
+    # Cleanup failures are warnings: they must not replace the installation's
+    # original exit status (or turn optional Docker failure into install failure).
+    cleanup_status=$?
+    trap - EXIT
+    set +e
     if [ "$rollback" = true ]; then
         printf 'Restoring the previous launchd installation after failure...\n' >&2
-        launchctl bootout "system/$service_label" >/dev/null 2>&1 || true
+        run_system launchctl bootout "system/$service_label" >/dev/null 2>&1 || true
         if [ -f "$build_dir/previous-binary" ]; then
-            restore_binary=$(mktemp "$bin_dir/.oci-mirror-proxy.XXXXXXXX") &&
-                cp -p "$build_dir/previous-binary" "$restore_binary" &&
-                mv -f "$restore_binary" "$destination" || printf 'Warning: binary restore failed.\n' >&2
+            restore_binary=$(run_system mktemp "$bin_dir/.oci-mirror-proxy.XXXXXXXX") &&
+                run_system cp -p "$build_dir/previous-binary" "$restore_binary" &&
+                run_system mv -f "$restore_binary" "$destination" || printf 'Warning: binary restore failed.\n' >&2
         else
-            rm -f "$destination"
+            run_system rm -f "$destination"
         fi
         if [ -f "$build_dir/previous-service" ]; then
-            cp -p "$build_dir/previous-service" "$service_file" || printf 'Warning: service definition restore failed.\n' >&2
+            run_system cp -p "$build_dir/previous-service" "$service_file" || printf 'Warning: service definition restore failed.\n' >&2
             if [ "$previous_loaded" = true ]; then
-                launchctl bootstrap system "$service_file" || printf 'Warning: previous service restart failed.\n' >&2
+                run_system launchctl bootstrap system "$service_file" || printf 'Warning: previous service restart failed.\n' >&2
             fi
         else
-            rm -f "$service_file"
+            run_system rm -f "$service_file"
         fi
         if [ "$previous_disabled" = true ]; then
-            launchctl disable "system/$service_label" || printf 'Warning: disabled state restore failed.\n' >&2
+            run_system launchctl disable "system/$service_label" || printf 'Warning: disabled state restore failed.\n' >&2
         fi
     fi
-    rm -rf "$build_dir"
-    if [ -n "$staged_binary" ]; then rm -f "$staged_binary"; fi
-    if [ -n "${handoff_dir:-}" ]; then rm -rf "$handoff_dir"; fi
+    rm -rf "$build_dir" || printf 'Warning: could not remove temporary directory %s\n' "$build_dir" >&2
+    if [ -n "$staged_binary" ]; then
+        run_system rm -f "$staged_binary" || printf 'Warning: could not remove staged executable %s\n' "$staged_binary" >&2
+    fi
+    if [ -n "${handoff_dir:-}" ]; then
+        rm -rf "$handoff_dir" || printf 'Warning: could not remove handoff directory %s\n' "$handoff_dir" >&2
+    fi
+    exit "$cleanup_status"
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
@@ -446,6 +493,17 @@ if [ "$action" = uninstall ]; then
     done
     [ ! -e "$destination" ] || [ -f "$destination" ] || die 'installed binary is not a regular file'
     config=/etc/oci-mirror-proxy/config.yaml
+    # A private root-owned state directory looks absent to an ordinary user.
+    # Check it with system privileges, even for a binary-only installation.
+    if [ "$os" = linux ] && [ "$skip_docker" = false ]; then
+        if [ "$(id -u)" -ne 0 ]; then
+            command -v sudo >/dev/null 2>&1 || die 'cannot check system Docker state; rerun as root or explicitly use --skip-docker'
+            needs_sudo=true
+        fi
+        system_state=$(run_system sh -c 'if [ -e "$1" ] || [ -L "$1" ]; then printf managed; fi' sh /var/lib/oci-mirror-proxy/dockerd-state.json) ||
+            die 'cannot check system Docker state; uninstall aborted'
+        [ "$system_state" != managed ] || die 'system Docker integration is managed; revert it manually first or use --skip-docker'
+    fi
     if [ "$skip_docker" = false ]; then
         state=
         if [ "$service" = false ]; then
@@ -461,7 +519,7 @@ if [ "$action" = uninstall ]; then
                 state=/var/lib/oci-mirror-proxy/dockerd-state.json
             fi
         fi
-        if [ -e "$state" ] || [ -L "$state" ]; then
+        if run_system test -e "$state" || run_system test -L "$state"; then
             # Existing state identifies files, not the proxy installation. Never
             # revert another instance merely because its state directory exists.
             die 'managed Docker state exists; run oci-mirror-proxy dockerd revert as the Docker user first, then retry (or explicitly use --skip-docker)'
@@ -471,20 +529,20 @@ if [ "$action" = uninstall ]; then
     fi
     case "$manager" in
         systemd)
-            systemctl stop oci-mirror-proxy.service
-            systemctl disable oci-mirror-proxy.service
-            rm -f "$service_file"
-            systemctl daemon-reload ;;
+            run_system systemctl stop oci-mirror-proxy.service
+            run_system systemctl disable oci-mirror-proxy.service
+            run_system rm -f "$service_file"
+            run_system systemctl daemon-reload ;;
         openrc)
-            if rc-service oci-mirror-proxy status >/dev/null 2>&1; then rc-service oci-mirror-proxy stop; fi
-            rc-update del oci-mirror-proxy default
-            rm -f "$service_file" ;;
+            if run_system rc-service oci-mirror-proxy status >/dev/null 2>&1; then run_system rc-service oci-mirror-proxy stop; fi
+            run_system rc-update del oci-mirror-proxy default
+            run_system rm -f "$service_file" ;;
         launchd)
-            if launchctl print "system/$service_label" >/dev/null 2>&1; then launchctl bootout "system/$service_label"; fi
-            launchctl enable "system/$service_label"
-            rm -f "$service_file" ;;
+            if launchctl print "system/$service_label" >/dev/null 2>&1; then run_system launchctl bootout "system/$service_label"; fi
+            run_system launchctl enable "system/$service_label"
+            run_system rm -f "$service_file" ;;
     esac
-    rm -f "$destination"
+    run_system rm -f "$destination"
     printf 'Uninstalled %s. Configuration, caches and logs preserved. Docker was not restarted.\n' "$destination"
     exit 0
 fi
@@ -560,7 +618,7 @@ if [ "$build" = true ]; then
     )
 fi
 
-mkdir -p "$bin_dir" || die "cannot create $bin_dir; try --prefix \"\$HOME/.local\""
+run_system mkdir -p "$bin_dir" || die "cannot create $bin_dir; try --prefix \"\$HOME/.local\""
 if [ "$manager" = launchd ]; then
     # Back up only installer-owned artifacts; configuration is never rolled back.
     previous_loaded=false
@@ -569,20 +627,20 @@ if [ "$manager" = launchd ]; then
     previous_disabled=false
     # launchd persists disabled overrides independently of the plist.
     if launchctl print-disabled system | grep -F "\"$service_label\" => true" >/dev/null; then previous_disabled=true; fi
-    if [ -e "$destination" ]; then cp -p "$destination" "$build_dir/previous-binary"; fi
-    if [ -e "$service_file" ]; then cp -p "$service_file" "$build_dir/previous-service"; fi
+    if [ -e "$destination" ]; then run_system cp -p "$destination" "$build_dir/previous-binary"; fi
+    if [ -e "$service_file" ]; then run_system cp -p "$service_file" "$build_dir/previous-service"; fi
     rollback=true
 fi
 # Rename on the same filesystem so updating a running executable is safe.
-staged_binary=$(mktemp "$bin_dir/.oci-mirror-proxy.XXXXXXXX")
-install -m 755 "$build_dir/oci-mirror-proxy" "$staged_binary"
-mv -f "$staged_binary" "$destination"
+staged_binary=$(run_system mktemp "$bin_dir/.oci-mirror-proxy.XXXXXXXX")
+run_system install -m 755 "$build_dir/oci-mirror-proxy" "$staged_binary"
+run_system mv -f "$staged_binary" "$destination"
 staged_binary=
 printf 'Installed %s (%s)\n' "$destination" "$version"
 if [ -n "$manager" ]; then
     config=/etc/oci-mirror-proxy/config.yaml
-    if [ ! -e "$config" ] && [ ! -L "$config" ]; then
-        install -d -m 700 /etc/oci-mirror-proxy
+    if ! run_system test -e "$config" && ! run_system test -L "$config"; then
+        run_system install -d -m 700 /etc/oci-mirror-proxy
         if [ "$manager" = launchd ]; then
             init_config "$config" --admin-socket /var/run/oci-mirror-proxy/admin.sock
         else
@@ -590,35 +648,33 @@ if [ -n "$manager" ]; then
         fi
     fi
     if [ "$manager" = systemd ]; then
-        install -m 644 "$build_dir/service" "$service_file"
-        systemctl daemon-reload
-        systemctl enable oci-mirror-proxy.service
-        systemctl restart oci-mirror-proxy.service
-        systemctl is-active --quiet oci-mirror-proxy.service
+        run_system install -m 644 "$build_dir/service" "$service_file"
+        run_system systemctl daemon-reload
+        run_system systemctl enable oci-mirror-proxy.service
+        run_system systemctl restart oci-mirror-proxy.service
+        run_system systemctl is-active --quiet oci-mirror-proxy.service
     elif [ "$manager" = openrc ]; then
-        install -m 755 "$build_dir/service" "$service_file"
-        rc-update add oci-mirror-proxy default
-        if rc-service oci-mirror-proxy status >/dev/null 2>&1; then
-            rc-service oci-mirror-proxy restart
+        run_system install -m 755 "$build_dir/service" "$service_file"
+        run_system rc-update add oci-mirror-proxy default
+        if run_system rc-service oci-mirror-proxy status >/dev/null 2>&1; then
+            run_system rc-service oci-mirror-proxy restart
         else
-            rc-service oci-mirror-proxy start
+            run_system rc-service oci-mirror-proxy start
         fi
-        rc-service oci-mirror-proxy status
+        run_system rc-service oci-mirror-proxy status
     else
         # Resolve the same runtime fallback as the daemon, not the installer's
         # inherited user environment, when an older config has no socket path.
-        HOME=/var/root
-        XDG_RUNTIME_DIR=/var/run
-        export HOME XDG_RUNTIME_DIR
-        unset XDG_CONFIG_HOME XDG_CACHE_HOME
-        install -d -m 755 /Library/LaunchDaemons
-        install -d -m 700 /var/log/oci-mirror-proxy
-        install -o root -g wheel -m 644 "$build_dir/service" "$service_file"
+        # Set daemon environment only on daemon-facing commands below. Changing
+        # the installer's HOME would lose the original Desktop user's identity.
+        run_system install -d -m 755 /Library/LaunchDaemons
+        run_system install -d -m 700 /var/log/oci-mirror-proxy
+        run_system install -o root -g wheel -m 644 "$build_dir/service" "$service_file"
         if launchctl print "system/$service_label" >/dev/null 2>&1; then
-            launchctl bootout "system/$service_label"
+            run_system launchctl bootout "system/$service_label"
         fi
-        launchctl enable "system/$service_label"
-        launchctl bootstrap system "$service_file"
+        run_system launchctl enable "system/$service_label"
+        run_system launchctl bootstrap system "$service_file"
         # Registration alone does not imply a healthy process. The app creates
         # its socket directory on every start, including after /var/run is reset.
         ready=false
@@ -626,7 +682,8 @@ if [ -n "$manager" ]; then
         while [ "$attempts" -lt 15 ]; do
             if launchctl print "system/$service_label" > "$build_dir/launch-state" 2>&1 &&
                 grep -E 'pid = [0-9]+' "$build_dir/launch-state" >/dev/null &&
-                "$destination" status --config "$config" > "$build_dir/status" 2>&1; then
+                run_system env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME HOME=/var/root XDG_RUNTIME_DIR=/var/run \
+                    "$destination" status --config "$config" > "$build_dir/status" 2>&1; then
                 ready=true
                 break
             fi
@@ -645,7 +702,7 @@ if [ -n "$manager" ]; then
         ready=false
         attempts=0
         while [ "$attempts" -lt 15 ]; do
-            if "$destination" status --config "$config" > "$build_dir/status" 2>&1; then
+            if run_system "$destination" status --config "$config" > "$build_dir/status" 2>&1; then
                 ready=true
                 break
             fi
@@ -680,38 +737,45 @@ fi
 # state is the authority on updates, so revert is never silently undone.
 if [ -n "$manager" ] && [ "$skip_docker" = false ]; then
     printf '\nConfiguring Docker...\n'
-    if [ -n "$docker_identity_error" ]; then
-        printf 'Proxy installation succeeded; Docker integration failed: %s\n' "$docker_identity_error" >&2
-        exit 1
-    fi
-    if [ -n "$docker_user" ]; then
-        handoff_dir=$(mktemp -d "${TMPDIR:-/tmp}/oci-mirror-proxy-info.XXXXXXXX")
-        server_info="$handoff_dir/server-info.json"
-        "$destination" server info --config "$config" --json > "$server_info" || die 'proxy installed, but could not query server information'
-        # Keep the directory root-owned so the reader cannot substitute files.
-        # Only the verified user can read the JSON; traversal alone reveals none.
-        chown "$docker_user" "$server_info"
-        chmod 711 "$handoff_dir"
-        chmod 600 "$server_info"
-    fi
     # Keep the outer positional parameters intact: they belong to remote update.
     apply_docker() {
+        if [ -n "$docker_identity_error" ]; then
+            printf '%s\n' "$docker_identity_error" >&2
+            return 1
+        fi
+        if [ -n "$docker_user" ]; then
+            handoff_dir=$(mktemp -d "${TMPDIR:-/tmp}/oci-mirror-proxy-info.XXXXXXXX") || return 1
+            server_info="$handoff_dir/server-info.json"
+            run_config "$destination" server info --config "$config" --json > "$server_info" || return 1
+            # When invoked as root, keep the directory root-owned and grant only
+            # the verified Desktop user read access. No privileged process reads
+            # this handoff again; a non-root caller can keep its own ownership.
+            if [ "$(id -u)" -eq 0 ]; then chown "$docker_user" "$server_info" || return 1; fi
+            chmod 711 "$handoff_dir" || return 1
+            chmod 600 "$server_info" || return 1
+        fi
         if [ "$update" = true ]; then set -- --if-managed; else set --; fi
         if [ -n "$docker_user" ]; then
-            sudo -H -u "$docker_user" -- env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_RUNTIME_DIR HOME="$docker_home" \
+            run_docker_user env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_RUNTIME_DIR HOME="$docker_home" \
                 "$destination" dockerd apply --server-info "$server_info" --verify "$@"
         else
             if [ -n "$docker_endpoint" ]; then
-                env -u DOCKER_CONTEXT DOCKER_HOST="$docker_endpoint" "$destination" dockerd apply --config "$config" --verify "$@"
+                run_system env -u DOCKER_CONTEXT DOCKER_HOST="$docker_endpoint" "$destination" dockerd apply --config "$config" --verify "$@"
             else
-                "$destination" dockerd apply --config "$config" --verify "$@"
+                run_system "$destination" dockerd apply --config "$config" --verify "$@"
             fi
         fi
     }
     if ! apply_docker; then
-        printf 'Proxy installation succeeded; Docker integration failed. Docker was not restarted. Fix the reported issue, then run as the Docker user (with sudo for system Docker):\n' >&2
-        printf '  sudo oci-mirror-proxy server info --config %s --json > server-info.json\n' "$config" >&2
-        printf '  oci-mirror-proxy dockerd apply --server-info server-info.json --verify\n' >&2
-        exit 1
+        printf 'Warning: proxy installation succeeded, but Docker integration failed. Docker was not restarted. Fix the reported issue, then run:\n' >&2
+        printf '  (umask 077; sudo "%s" server info --config "%s" --json > server-info.json)\n' "$destination" "$config" >&2
+        if [ "$os" = linux ]; then
+            printf 'For system Docker (select the intended Docker context first):\n' >&2
+            printf '  sudo "%s" dockerd apply --server-info server-info.json --verify\n' "$destination" >&2
+        else
+            printf 'As the Docker Desktop user, without sudo:\n' >&2
+            printf '  "%s" dockerd apply --server-info server-info.json --verify\n' "$destination" >&2
+        fi
+        printf '  rm -f server-info.json\n' >&2
     fi
 fi

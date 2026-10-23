@@ -721,9 +721,15 @@ func TestWindowsInstallerElevation(t *testing.T) {
 				root := windowsInstallerTempDir(t)
 				installer := filepath.Join(root, "installer with spaces.ps1")
 				script := regexp.MustCompile(`(?ms)^function Test-IsAdministrator \{.*?^}`).ReplaceAllString(string(original), `function Test-IsAdministrator { return ($$env:TEST_SCENARIO -eq 'administrator') }`)
+				// Exercise the real elevation transport without network/compiler work.
+				script = regexp.MustCompile(`(?ms)^function Prepare-Installation \{.*?^}`).ReplaceAllString(script, `function Prepare-Installation {
+    $$binary = Join-Path $$tempDir 'prepared.exe'
+    [IO.File]::WriteAllText($$binary, 'prepared fixture')
+    $$wrapperDownload = $$binary
+}`)
 				// Stop before querying SCM, downloading or changing any host files.
 				script = strings.Replace(script, "$existingService = Get-CimInstance", "throw 'REACHED_INSTALLATION'; $existingService = Get-CimInstance", 1)
-				script = strings.Replace(script, "$nativeArch = $env:PROCESSOR_ARCHITEW6432", "throw 'REACHED_INSTALLATION'; $nativeArch = $env:PROCESSOR_ARCHITEW6432", 1)
+				script = strings.Replace(script, "\n$nativeArch = $env:PROCESSOR_ARCHITEW6432", "\nthrow 'REACHED_INSTALLATION'; $nativeArch = $env:PROCESSOR_ARCHITECTURE", 1)
 				if err := os.WriteFile(installer, []byte(script), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -752,7 +758,7 @@ function Start-Process {
  # Execute the actual generated bootstrap with a harmless parameter-capture
  # script. Only substitute its privilege check; never trigger real UAC.
  $capture = Join-Path $env:TEMP 'capture.ps1'
- [IO.File]::WriteAllText($capture, 'param($Prefix,$Config,$Version,$DownloadBaseUrl,$WinSWDownloadBaseUrl,$ServiceName,[switch]$Update,[switch]$NoService,[switch]$Build,[switch]$NoElevate); if ($Prefix -cne $env:TEST_PREFIX -or $DownloadBaseUrl -cne $env:DOWNLOAD_BASE_URL -or -not $Update -or $NoService) { throw "Capture mismatch" }; if ($env:TEST_SCENARIO -eq "child failure") { throw "child failed" }')
+  [IO.File]::WriteAllText($capture, 'param($Prefix,$Config,$Version,$DownloadBaseUrl,$WinSWDownloadBaseUrl,$ServiceName,$Command,$PreparedBinary,$PreparedWrapper,$PreparedHash,$InfoID,[switch]$ServiceStageOnly,[switch]$Update,[switch]$NoService,[switch]$Build,[switch]$NoElevate); if ($Prefix -cne $env:TEST_PREFIX -or $DownloadBaseUrl -cne $env:DOWNLOAD_BASE_URL -or -not $Update -or $NoService) { throw "Capture mismatch" }; if (-not $PreparedBinary -or (Get-FileHash -LiteralPath $PreparedBinary -Algorithm SHA256).Hash -ne $PreparedHash) { throw "Missing prepared binary" }; if ($env:TEST_SCENARIO -eq "child failure") { throw "child failed" }')
  $payload.Script = $capture
  $data = $payload | ConvertTo-Json -Compress -Depth 5
  $replacement = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($data))
@@ -847,6 +853,50 @@ if ($sddl -like '*;;;BU)*' -or $sddl -notlike '*FA;;;SY)*' -or $sddl -notlike '*
 			}
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("permissions: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestWindowsInstallerDockerFailureWarns(t *testing.T) {
+	for _, shell := range []string{"powershell.exe", "pwsh.exe"} {
+		binary, err := exec.LookPath(shell)
+		if err != nil {
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			root := windowsInstallerTempDir(t)
+			installer, err := filepath.Abs(filepath.Join("..", "..", "..", "install.ps1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner := filepath.Join(root, "run.ps1")
+			if err := os.WriteFile(runner, []byte(`
+$ErrorActionPreference = 'Stop'
+$ast = [Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$null, [ref]$null)
+foreach ($name in @('Write-DockerRecovery', 'Connect-UserDocker')) {
+    $fn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+$SkipDocker = $false; $NoService = $false; $Update = $true
+$binDir = $env:TEMP; $InfoID = 'fixture'; $Config = 'C:\private config\config.yaml'
+function Fail-Docker { $global:LASTEXITCODE = 17 }
+function Throw-Docker { throw 'Docker unavailable' }
+foreach ($failure in @('Fail-Docker', 'Throw-Docker')) {
+    $destination = $failure
+    $target = Join-Path $binDir "server-info-$InfoID.json"
+    [IO.File]::WriteAllText($target, '{}')
+    Connect-UserDocker
+    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $target)) { throw 'Optional Docker failure leaked exit status or handoff' }
+}
+`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", runner)
+			cmd.Env = append(os.Environ(), "TEST_INSTALLER="+installer, "TEMP="+root, "TMP="+root)
+			out, err := cmd.CombinedOutput()
+			if err != nil || !strings.Contains(string(out), "Proxy installation succeeded") || !strings.Contains(string(out), "dockerd apply --server-info server-info.json --verify") {
+				t.Fatalf("Docker recovery warning: %v\n%s", err, out)
 			}
 		})
 	}

@@ -4,12 +4,14 @@
 .SYNOPSIS
 Install, update or uninstall oci-mirror-proxy and its Windows service.
 .DESCRIPTION
-Requests UAC approval when needed to install and start the automatic service.
+Downloads and builds run before UAC. Requests administrator approval only for
+system publication and service management; NoService never requests UAC.
 The default installation uses WinSW v2.12.0 (.NET Framework 4.x required), starts
 the service automatically at boot and configures failure recovery. Downloads are
 verified with SHA256. Existing configuration is preserved; failed service updates
 restore the previous binary. Service installs synchronize subscriptions and
-configure the current user's local Docker without restarting it.
+configure the current user's local Docker without restarting it. Docker setup
+failures warn with manual recovery commands; they do not undo installation.
 
 The binary directory is added to system PATH for service installs and current-user
 PATH with NoService. Existing entries are preserved and duplicate additions are
@@ -107,6 +109,13 @@ param(
     [switch]$SkipDocker,
     [Parameter(DontShow = $true)]
     [switch]$ServiceStageOnly,
+    [Parameter(DontShow = $true)]
+    [string]$PreparedBinary,
+    [Parameter(DontShow = $true)]
+    [string]$PreparedWrapper,
+    [Parameter(DontShow = $true)]
+    [ValidatePattern('^[a-fA-F0-9]{64}$')]
+    [string]$PreparedHash,
     [Parameter(DontShow = $true)]
     [string]$InfoID = ([Guid]::NewGuid().ToString('N'))
 )
@@ -359,6 +368,119 @@ function Protect-ServicePath([string]$Path, [switch]$Directory, [switch]$ReadUse
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
+function Prepare-Installation {
+    $sourceDir = $null
+    if ($Build) {
+        $currentDir = (Get-Location).ProviderPath
+        $moduleFile = Join-Path $currentDir 'go.mod'
+        if ((Test-Path -LiteralPath $moduleFile -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $currentDir 'cmd/oci-mirror-proxy') -PathType Container) -and
+            ([IO.File]::ReadAllText($moduleFile) -match '(?m)^module\s+github\.com/runui/oci-mirror-proxy\s*\r?$')) {
+            $sourceDir = $currentDir
+            # Local source is not necessarily a published release. Do not resolve
+            # latest over the network or label the working tree as that release.
+            if ($Version -eq 'latest') { $Version = 'dev' }
+        }
+    }
+    if ($Version -eq 'latest') {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/latest"
+        $uri = $response.BaseResponse.ResponseUri
+        if (-not $uri) { $uri = $response.BaseResponse.RequestMessage.RequestUri }
+        if ($uri.AbsolutePath -notmatch '/releases/tag/([a-zA-Z0-9][a-zA-Z0-9._+-]*)/?$') {
+            throw 'Cannot resolve latest release; specify -Version explicitly.'
+        }
+        $Version = $Matches[1]
+    }
+    if ($Build) {
+        $go = Get-Command go -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $go) { throw '-Build requires Go; install Go to compile from source.' }
+        if ($sourceDir) {
+            Write-Host "Building local source from $sourceDir ($Version) for windows/$arch..."
+        } else {
+            Write-Host "Building release $Version for windows/$arch..."
+            $archive = Join-Path $tempDir 'source.zip'
+            Invoke-WebRequest -UseBasicParsing -Uri "$repo/archive/$Version.zip" -OutFile $archive
+            $extracted = Join-Path $tempDir 'source'
+            Expand-Archive -LiteralPath $archive -DestinationPath $extracted
+            $roots = @(Get-ChildItem -LiteralPath $extracted -Force)
+            if ($roots.Count -ne 1 -or -not $roots[0].PSIsContainer -or -not (Test-Path -LiteralPath (Join-Path $roots[0].FullName 'go.mod') -PathType Leaf)) {
+                throw 'Unexpected source archive layout.'
+            }
+            $sourceDir = $roots[0].FullName
+        }
+        $binary = Join-Path $tempDir 'oci-mirror-proxy.exe'
+        $savedBuildEnv = @{}
+        $buildEnvNames = @('CGO_ENABLED', 'GOOS', 'GOARCH')
+        if (-not $NoService) { $buildEnvNames += @('GOCACHE', 'GOMODCACHE', 'GOPATH', 'GOTMPDIR', 'GOENV', 'GOWORK', 'GOFLAGS') }
+        foreach ($name in $buildEnvNames) {
+            $savedBuildEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        }
+        Push-Location -LiteralPath $sourceDir
+        try {
+            $env:CGO_ENABLED = '0'
+            $env:GOOS = 'windows'
+            $env:GOARCH = $arch
+            if (-not $NoService) {
+                # Service builds use isolated caches whether launched normally
+                # or from an existing Administrator shell; restore caller env.
+                $env:GOCACHE = Join-Path $tempDir 'gocache'
+                $env:GOPATH = Join-Path $tempDir 'gopath'
+                $env:GOMODCACHE = Join-Path $env:GOPATH 'pkg\mod'
+                $env:GOTMPDIR = $tempDir
+                $env:GOENV = 'off'
+                $env:GOWORK = 'off'
+                $env:GOFLAGS = ''
+            }
+            & $go.Source build -trimpath -ldflags "-s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version=$Version" -o $binary ./cmd/oci-mirror-proxy
+            if ($LASTEXITCODE -ne 0) { throw "Source build failed (exit $LASTEXITCODE)." }
+            if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Source build did not produce the executable.' }
+        } finally {
+            Pop-Location
+            foreach ($name in $savedBuildEnv.Keys) {
+                if ($null -eq $savedBuildEnv[$name]) {
+                    Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+                } else {
+                    [Environment]::SetEnvironmentVariable($name, $savedBuildEnv[$name], 'Process')
+                }
+            }
+        }
+    } else {
+        $asset = "oci-mirror-proxy_${Version}_windows_${arch}.zip"
+        $archive = Join-Path $tempDir $asset
+        Write-Host "Downloading $asset..."
+        Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/download/$Version/$asset" -OutFile $archive
+        $checksums = Join-Path $tempDir 'SHA256SUMS'
+        Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/download/$Version/SHA256SUMS" -OutFile $checksums
+        $pattern = '^([a-fA-F0-9]{64})\s+\*?(?:\./)?' + [regex]::Escape($asset) + '$'
+        $expected = @(Get-Content -LiteralPath $checksums | ForEach-Object { if ($_ -match $pattern) { $Matches[1] } })
+        if ($expected.Count -ne 1) { throw "Missing or invalid checksum for $asset." }
+        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected[0]) {
+            throw 'SHA256 verification failed; installation aborted.'
+        }
+        $extracted = Join-Path $tempDir 'extracted'
+        Expand-Archive -LiteralPath $archive -DestinationPath $extracted
+        $binary = Join-Path $extracted 'oci-mirror-proxy.exe'
+        if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Release archive is missing the executable.' }
+    }
+    if (-not $NoService) {
+        $wrapperDownload = Join-Path $tempDir 'WinSW.exe'
+        Invoke-WebRequest -UseBasicParsing -Uri "$WinSWDownloadBaseUrl/releases/download/v2.12.0/WinSW.NET4.exe" -OutFile $wrapperDownload
+        if ((Get-FileHash -LiteralPath $wrapperDownload -Algorithm SHA256).Hash -ne $wrapperHash) { throw 'WinSW SHA256 verification failed.' }
+    }
+}
+
+function Write-DockerRecovery([string]$Reason) {
+    Write-Warning "Proxy installation succeeded, but Docker integration was not completed: $Reason. Docker was not restarted."
+    # Literal quoting keeps custom installation paths usable in pasted commands.
+    $exe = $destination.Replace("'", "''")
+    $configuration = $Config.Replace("'", "''")
+    Write-Host "Run in an Administrator PowerShell:"
+    Write-Host "  & '$exe' server info --config '$configuration' --json | Set-Content -Encoding UTF8 server-info.json"
+    Write-Host 'Copy server-info.json to the Docker user, then run as that user (not as Administrator):'
+    Write-Host "  & '$exe' dockerd apply --server-info server-info.json --verify"
+    Write-Host '  Remove-Item -LiteralPath server-info.json'
+}
+
 function Connect-UserDocker {
     if ($SkipDocker -or $NoService) { return }
     $targetFile = Join-Path $binDir "server-info-$InfoID.json"
@@ -367,8 +489,11 @@ function Connect-UserDocker {
     try {
         & $destination @arguments
         if ($LASTEXITCODE -ne 0) {
-            throw "Proxy installation succeeded, but Docker integration failed. Docker was not restarted. Export server info --json as Administrator, then retry dockerd apply --server-info FILE --verify as the Docker user."
+            throw "dockerd apply exited with code $LASTEXITCODE"
         }
+    } catch {
+        Write-DockerRecovery $_.ToString()
+        $global:LASTEXITCODE = 0
     } finally { Remove-Item -LiteralPath $targetFile -Force -ErrorAction SilentlyContinue }
 }
 
@@ -443,6 +568,7 @@ if ((Test-Path -LiteralPath $destination) -and ((Get-Item -LiteralPath $destinat
     throw "Refusing to replace symlink $destination."
 }
 
+$wrapperHash = '923111C7142B3DC783A3C722B19B8A21BCB78222D7A136AC33F0CA8A29F4CB66'
 $existingService = $null
 if ($Command -eq 'uninstall') {
     Assert-NoReparsePoint $destination
@@ -480,9 +606,32 @@ if (-not $NoService) {
             if (-not $go) { throw '-Build requires Go; install Go to compile from source.' }
             $goPath = $go.Source
         }
-        $code = Invoke-ElevatedInstaller $PSCommandPath $elevationParameters $goPath
-        if ($code -ne 0) { Write-Host "Elevated installation failed (exit $code)." }
-        if ($code -eq 0 -and $Command -ne 'uninstall') { Connect-UserDocker }
+        $prepareDir = $null
+        try {
+            if ($Command -ne 'uninstall') {
+                # Network and compiler operations do not require UAC. Only the
+                # validated snapshot is passed to the system publication stage.
+                $tempDir = Join-Path ([IO.Path]::GetTempPath()) ('oci-mirror-proxy-install-' + [Guid]::NewGuid().ToString('N'))
+                $prepareDir = $tempDir
+                New-Item -ItemType Directory -Path $tempDir | Out-Null
+                $nativeArch = $env:PROCESSOR_ARCHITEW6432
+                if (-not $nativeArch) { $nativeArch = $env:PROCESSOR_ARCHITECTURE }
+                $arch = switch ($nativeArch) { 'AMD64' { 'amd64' } 'ARM64' { 'arm64' } default { throw "Unsupported Windows architecture: $nativeArch" } }
+                . Prepare-Installation
+                $elevationParameters['Version'] = $Version
+                $elevationParameters['PreparedBinary'] = $binary
+                $elevationParameters['PreparedWrapper'] = $wrapperDownload
+                $elevationParameters['PreparedHash'] = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
+            }
+            $code = Invoke-ElevatedInstaller $PSCommandPath $elevationParameters $goPath
+            if ($code -ne 0) { Write-Host "Elevated installation failed (exit $code)." }
+            if ($code -eq 0 -and $Command -ne 'uninstall') { Connect-UserDocker }
+        } finally {
+            if ($prepareDir) {
+                try { Remove-Item -LiteralPath $prepareDir -Recurse -Force }
+                catch { Write-Warning "Could not remove preparation directory ${prepareDir}: $_" }
+            }
+        }
         exit $code
     }
     # Never replace ACLs on shared system directories or a drive root.
@@ -516,7 +665,6 @@ if (-not $NoService) {
     $WinSWDownloadBaseUrl = $WinSWDownloadBaseUrl.TrimEnd('/')
     if ($WinSWDownloadBaseUrl -notmatch '^https://') { throw 'WinSWDownloadBaseUrl must use HTTPS.' }
     # AnyCPU .NET Framework build works on both amd64 and Windows ARM64.
-    $wrapperHash = '923111C7142B3DC783A3C722B19B8A21BCB78222D7A136AC33F0CA8A29F4CB66'
     if ((Test-Path -LiteralPath $wrapper) -and (Get-FileHash -LiteralPath $wrapper -Algorithm SHA256).Hash -ne $wrapperHash) {
         throw 'Existing WinSW executable differs from the pinned version; refusing to overwrite it.'
     }
@@ -547,105 +695,20 @@ $createdDirs = @()
 $pathChanged = $false
 New-Item -ItemType Directory -Path $tempDir | Out-Null
 try {
-    $sourceDir = $null
-    if ($Build) {
-        $currentDir = (Get-Location).ProviderPath
-        $moduleFile = Join-Path $currentDir 'go.mod'
-        if ((Test-Path -LiteralPath $moduleFile -PathType Leaf) -and
-            (Test-Path -LiteralPath (Join-Path $currentDir 'cmd/oci-mirror-proxy') -PathType Container) -and
-            ([IO.File]::ReadAllText($moduleFile) -match '(?m)^module\s+github\.com/runui/oci-mirror-proxy\s*\r?$')) {
-            $sourceDir = $currentDir
-            # Local source is not necessarily a published release. Do not resolve
-            # latest over the network or label the working tree as that release.
-            if ($Version -eq 'latest') { $Version = 'dev' }
-        }
-    }
-    if ($Version -eq 'latest') {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/latest"
-        $uri = $response.BaseResponse.ResponseUri
-        if (-not $uri) { $uri = $response.BaseResponse.RequestMessage.RequestUri }
-        if ($uri.AbsolutePath -notmatch '/releases/tag/([a-zA-Z0-9][a-zA-Z0-9._+-]*)/?$') {
-            throw 'Cannot resolve latest release; specify -Version explicitly.'
-        }
-        $Version = $Matches[1]
-    }
-    if ($Build) {
-        $go = Get-Command go -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $go) { throw '-Build requires Go; install Go to compile from source.' }
-        if ($sourceDir) {
-            Write-Host "Building local source from $sourceDir ($Version) for windows/$arch..."
-        } else {
-            Write-Host "Building release $Version for windows/$arch..."
-            $archive = Join-Path $tempDir 'source.zip'
-            Invoke-WebRequest -UseBasicParsing -Uri "$repo/archive/$Version.zip" -OutFile $archive
-            $extracted = Join-Path $tempDir 'source'
-            Expand-Archive -LiteralPath $archive -DestinationPath $extracted
-            $roots = @(Get-ChildItem -LiteralPath $extracted -Force)
-            if ($roots.Count -ne 1 -or -not $roots[0].PSIsContainer -or -not (Test-Path -LiteralPath (Join-Path $roots[0].FullName 'go.mod') -PathType Leaf)) {
-                throw 'Unexpected source archive layout.'
-            }
-            $sourceDir = $roots[0].FullName
-        }
+    if ($PreparedBinary) {
+        if (-not $ServiceStageOnly -or -not (Test-IsAdministrator) -or -not $PreparedHash) { throw 'Prepared artifacts require the elevated service stage and a checksum.' }
+        # Copy first, then check the private snapshot. Never publish directly from
+        # a caller-writable handoff or trust its path after checking its hash.
+        Assert-NoReparsePoint $PreparedBinary
         $binary = Join-Path $tempDir 'oci-mirror-proxy.exe'
-        $savedBuildEnv = @{}
-        $buildEnvNames = @('CGO_ENABLED', 'GOOS', 'GOARCH')
-        if (-not $NoService) { $buildEnvNames += @('GOCACHE', 'GOMODCACHE', 'GOPATH', 'GOTMPDIR', 'GOENV', 'GOWORK', 'GOFLAGS') }
-        foreach ($name in $buildEnvNames) {
-            $savedBuildEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-        }
-        Push-Location -LiteralPath $sourceDir
-        try {
-            $env:CGO_ENABLED = '0'
-            $env:GOOS = 'windows'
-            $env:GOARCH = $arch
-            if (-not $NoService) {
-                # An elevated build must not leave administrator-owned files in
-                # the invoking user's caches or consult their persisted go env.
-                $env:GOCACHE = Join-Path $tempDir 'gocache'
-                $env:GOPATH = Join-Path $tempDir 'gopath'
-                $env:GOMODCACHE = Join-Path $env:GOPATH 'pkg\mod'
-                $env:GOTMPDIR = $tempDir
-                $env:GOENV = 'off'
-                $env:GOWORK = 'off'
-                $env:GOFLAGS = ''
-            }
-            & $go.Source build -trimpath -ldflags "-s -w -X github.com/runui/oci-mirror-proxy/internal/cli.version=$Version" -o $binary ./cmd/oci-mirror-proxy
-            if ($LASTEXITCODE -ne 0) { throw "Source build failed (exit $LASTEXITCODE)." }
-            if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Source build did not produce the executable.' }
-        } finally {
-            Pop-Location
-            foreach ($name in $savedBuildEnv.Keys) {
-                if ($null -eq $savedBuildEnv[$name]) {
-                    Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
-                } else {
-                    [Environment]::SetEnvironmentVariable($name, $savedBuildEnv[$name], 'Process')
-                }
-            }
-        }
-    } else {
-        $asset = "oci-mirror-proxy_${Version}_windows_${arch}.zip"
-        $archive = Join-Path $tempDir $asset
-        Write-Host "Downloading $asset..."
-        Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/download/$Version/$asset" -OutFile $archive
-        $checksums = Join-Path $tempDir 'SHA256SUMS'
-        Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/download/$Version/SHA256SUMS" -OutFile $checksums
-        $pattern = '^([a-fA-F0-9]{64})\s+\*?(?:\./)?' + [regex]::Escape($asset) + '$'
-        $expected = @(Get-Content -LiteralPath $checksums | ForEach-Object { if ($_ -match $pattern) { $Matches[1] } })
-        if ($expected.Count -ne 1) { throw "Missing or invalid checksum for $asset." }
-        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected[0]) {
-            throw 'SHA256 verification failed; installation aborted.'
-        }
-        $extracted = Join-Path $tempDir 'extracted'
-        Expand-Archive -LiteralPath $archive -DestinationPath $extracted
-        $binary = Join-Path $extracted 'oci-mirror-proxy.exe'
-        if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Release archive is missing the executable.' }
-    }
-    if (-not $NoService) {
+        Copy-Item -LiteralPath $PreparedBinary -Destination $binary
+        if ((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -ne $PreparedHash) { throw 'Prepared binary changed during elevation.' }
+        Assert-NoReparsePoint $PreparedWrapper
         $wrapperDownload = Join-Path $tempDir 'WinSW.exe'
-        if (-not (Test-Path -LiteralPath $wrapper)) {
-            Invoke-WebRequest -UseBasicParsing -Uri "$WinSWDownloadBaseUrl/releases/download/v2.12.0/WinSW.NET4.exe" -OutFile $wrapperDownload
-            if ((Get-FileHash -LiteralPath $wrapperDownload -Algorithm SHA256).Hash -ne $wrapperHash) { throw 'WinSW SHA256 verification failed.' }
-        }
+        Copy-Item -LiteralPath $PreparedWrapper -Destination $wrapperDownload
+        if ((Get-FileHash -LiteralPath $wrapperDownload -Algorithm SHA256).Hash -ne $wrapperHash) { throw 'WinSW SHA256 verification failed.' }
+    } else { . Prepare-Installation }
+    if (-not $NoService) {
         foreach ($dir in @($Prefix, $binDir, $serviceDir, $configDir, $logDir)) {
             if (-not (Test-Path -LiteralPath $dir)) {
                 New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -727,6 +790,7 @@ try {
         # directory. Never write elevated output into the caller's temp directory
         # or expose the private service configuration to the Desktop user.
         if (-not $SkipDocker) {
+          try {
             $target = & $destination server info --config $Config --admin-socket $adminPipe --json
             if ($LASTEXITCODE -ne 0) { throw 'Could not query server information.' }
             $targetFile = Join-Path $binDir "server-info-$InfoID.json"
@@ -739,6 +803,12 @@ try {
             $users = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')
             $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($users, 'Delete', 'Allow')))
             Set-Acl -LiteralPath $targetFile -AclObject $acl
+        } catch {
+            # Optional handoff creation must not enter installation rollback.
+            if ($targetFile) { Remove-Item -LiteralPath $targetFile -Force -ErrorAction SilentlyContinue }
+            Write-DockerRecovery $_.ToString()
+            $global:LASTEXITCODE = 0
+          }
         }
         Add-BinaryPath
         Write-Host "Installed $destination ($Version). Service $ServiceName is running and enabled at boot."
@@ -795,8 +865,13 @@ try {
     }
     throw $failure
 } finally {
-    if ($staged -and (Test-Path -LiteralPath $staged)) { Remove-Item -LiteralPath $staged -Force }
-    Remove-Item -LiteralPath $tempDir -Recurse -Force
+    # Preserve the original transaction result if temporary cleanup fails.
+    if ($staged -and (Test-Path -LiteralPath $staged)) {
+        try { Remove-Item -LiteralPath $staged -Force }
+        catch { Write-Warning "Could not remove staged executable ${staged}: $_" }
+    }
+    try { Remove-Item -LiteralPath $tempDir -Recurse -Force }
+    catch { Write-Warning "Could not remove temporary directory ${tempDir}: $_" }
 }
 
 # Enrollment is outside the service transaction. Docker conflicts must not roll

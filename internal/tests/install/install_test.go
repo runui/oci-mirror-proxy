@@ -43,6 +43,11 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 		darwin          bool
 		sudo            bool
 		invalidSudo     bool
+		rootSudo        bool
+		infoFail        bool
+		unprivileged    bool
+		denySudo        bool
+		rootlessDocker  bool
 		existingService bool
 		customService   bool
 		skipDocker      bool
@@ -50,9 +55,17 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 	}{
 		{name: "first install"},
 		{name: "service applies Docker", service: true},
+		{name: "user service elevates only system operations", service: true, unprivileged: true},
+		{name: "user macOS service retains Desktop identity", service: true, darwin: true, unprivileged: true},
+		{name: "denied service elevation preserves installation", service: true, unprivileged: true, denySudo: true},
+		{name: "root sudo service applies Docker", service: true, rootSudo: true},
+		{name: "root sudo service update maintains Docker", service: true, rootSudo: true, update: true},
 		{name: "sudo macOS service applies as user", service: true, darwin: true, sudo: true},
 		{name: "service skips Docker", service: true, skipDocker: true},
 		{name: "Docker failure preserves service", service: true, dockerFail: true},
+		{name: "Docker identity failure is a warning", service: true, sudo: true, invalidSudo: true},
+		{name: "Docker information failure is a warning", service: true, darwin: true, sudo: true, infoFail: true},
+		{name: "rootless Docker requires manual setup", service: true, unprivileged: true, rootlessDocker: true},
 		{name: "service update only maintains managed Docker", service: true, update: true},
 		{name: "macOS first install", darwin: true},
 		{name: "macOS service", darwin: true, service: true},
@@ -131,15 +144,29 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 case "$1" in -s) echo "$TEST_OS" ;; -m) echo x86_64 ;; *) exit 1 ;; esac
 `, 0o755)
 			write(filepath.Join(tools, "id"), `#!/bin/sh
-if [ "$#" -eq 2 ]; then echo 501; else echo "$TEST_UID"; fi
+if [ "$#" -eq 2 ]; then
+    if [ "$2" = root ]; then echo 0; else echo 501; fi
+elif [ "$1" = -un ]; then echo fixture-user
+else echo "$TEST_UID"; fi
 `, 0o755)
 			write(filepath.Join(tools, "sudo"), `#!/bin/sh
 set -eu
-[ "$1" = -H ] && [ "$2" = -u ] && [ "$3" = fixture-user ] && [ "$4" = -- ]
+if [ "$1" = -- ]; then
+    shift
+    printf 'sudo-system\n' >> "$TEST_LOG"
+    [ "$TEST_DENY_SUDO" != true ] || exit 1
+    exec "$@"
+fi
+[ "$1" = -H ] && [ "$2" = -u ] && { [ "$3" = fixture-user ] || [ "$3" = root ]; } && [ "$4" = -- ]
 shift 4
 export HOME="$TEST_USER_HOME"
 printf 'sudo-user\n' >> "$TEST_LOG"
 exec "$@"
+`, 0o755)
+			write(filepath.Join(tools, "docker"), `#!/bin/sh
+set -eu
+[ "$*" = "context inspect --format {{.Endpoints.docker.Host}}" ]
+echo unix:///var/run/docker.sock
 `, 0o755)
 			write(filepath.Join(tools, "launchctl"), `#!/bin/sh
 printf 'launchctl %s\n' "$*" >> "$TEST_LOG"
@@ -166,6 +193,7 @@ set -eu
 case "$1" in
     env) case "$2" in GOHOSTOS) echo linux ;; GOHOSTARCH) echo amd64 ;; *) exit 1 ;; esac ;;
     build)
+        printf 'build-user\n' >> "$TEST_LOG"
         while [ "$#" -gt 0 ]; do
             if [ "$1" = -o ]; then cp "$TEST_BINARY" "$2"; exit 0; fi
             shift
@@ -198,7 +226,10 @@ case "$1" in
         echo 'mock synchronized'
         ;;
     status) exit 0 ;;
-    server) echo '{"schema_version":1,"config":{"proxy_url":"http://127.0.0.1:24817","registries":[{"alias":"docker.io","origin":"https://registry-1.docker.io"}]}}' ;;
+    server)
+        [ "$TEST_INFO_FAIL" != true ] || exit 1
+        echo '{"schema_version":1,"config":{"proxy_url":"http://127.0.0.1:24817","registries":[{"alias":"docker.io","origin":"https://registry-1.docker.io"}]}}'
+        ;;
     dockerd)
         case "$2" in
             apply)
@@ -252,7 +283,7 @@ esac
 			if tc.service {
 				args = append(args, "--service")
 			}
-			if tc.skipDocker || (tc.darwin && tc.service && !tc.sudo) {
+			if tc.skipDocker || (tc.darwin && tc.service && !tc.sudo && !tc.unprivileged) {
 				args = append(args, "--skip-docker")
 			}
 			if tc.update {
@@ -274,7 +305,7 @@ esac
 				platform = "Darwin"
 			}
 			uid := "501"
-			if tc.service || tc.sudo {
+			if (tc.service && !tc.unprivileged) || tc.sudo {
 				uid = "0"
 			}
 			cmd.Env = append(os.Environ(), "PATH="+tools+":"+os.Getenv("PATH"), "HOME="+home,
@@ -286,7 +317,14 @@ esac
 				"TEST_REMOTE_ARGS="+remoteArgsPath,
 				"TEST_INIT_FAIL="+strconv.FormatBool(tc.initFail), "TEST_SYNC_FAIL="+strconv.FormatBool(tc.syncFail),
 				"TEST_SERVICE_FAIL="+strconv.FormatBool(tc.serviceFail))
-			cmd.Env = append(cmd.Env, "TEST_DOCKER_FAIL="+strconv.FormatBool(tc.dockerFail))
+			cmd.Env = append(cmd.Env, "TEST_DOCKER_FAIL="+strconv.FormatBool(tc.dockerFail), "TEST_INFO_FAIL="+strconv.FormatBool(tc.infoFail), "TEST_DENY_SUDO="+strconv.FormatBool(tc.denySudo))
+			if tc.rootSudo {
+				cmd.Env = append(cmd.Env, "SUDO_USER=root", "SUDO_UID=0", "SUDO_GID=0", "TEST_USER_HOME="+home,
+					"DOCKER_HOST=", "DOCKER_CONTEXT=")
+			}
+			if tc.rootlessDocker {
+				cmd.Env = append(cmd.Env, "DOCKER_HOST=unix:///run/user/501/docker.sock", "DOCKER_CONTEXT=")
+			}
 			if tc.sudo {
 				sudoUID := "501"
 				if tc.invalidSudo {
@@ -311,6 +349,22 @@ esac
 			}
 			out, runErr := cmd.CombinedOutput()
 			log, _ := os.ReadFile(logPath)
+			if tc.unprivileged {
+				built := bytes.Index(log, []byte("build-user\n"))
+				elevated := bytes.Index(log, []byte("sudo-system\n"))
+				if built < 0 || elevated < built {
+					t.Fatalf("build did not precede elevation: %s", log)
+				}
+			}
+			if tc.denySudo {
+				if runErr == nil || bytes.Contains(log, []byte("systemctl restart")) {
+					t.Fatalf("denied elevation changed the service: %v\n%s", runErr, log)
+				}
+				if _, err := os.Stat(filepath.Join(prefix, "bin", "oci-mirror-proxy")); !os.IsNotExist(err) {
+					t.Fatalf("denied elevation published a binary: %v", err)
+				}
+				return
+			}
 			if tc.customService {
 				data, _ := os.ReadFile(servicePath)
 				if runErr == nil || string(data) != "custom service\n" || bytes.Contains(log, []byte("launchctl bootstrap")) {
@@ -333,12 +387,15 @@ esac
 				}
 				return
 			}
-			if tc.dockerFail {
-				if runErr == nil || !bytes.Contains(out, []byte("Proxy installation succeeded; Docker integration failed")) {
+			if tc.dockerFail || tc.infoFail || tc.rootlessDocker || (tc.service && tc.invalidSudo) {
+				if runErr != nil || !bytes.Contains(out, []byte("Warning: proxy installation succeeded, but Docker integration failed")) || !bytes.Contains(out, []byte("dockerd apply --server-info server-info.json --verify")) || !bytes.Contains(out, []byte("server info --config")) {
 					t.Fatalf("Docker failure not reported: %v\n%s", runErr, out)
 				}
 				if _, err := os.Stat(filepath.Join(prefix, "bin", "oci-mirror-proxy")); err != nil {
 					t.Fatal(err)
+				}
+				if tc.rootlessDocker && bytes.Contains(log, []byte("dockerd apply")) {
+					t.Fatalf("rootless Docker was enrolled as system Docker: %s", log)
 				}
 				return
 			}
@@ -352,8 +409,11 @@ esac
 				return
 			}
 			applied := bytes.Contains(log, []byte("dockerd apply"))
-			if applied != (tc.service && !tc.skipDocker && (!tc.darwin || tc.sudo)) {
+			if applied != (tc.service && !tc.skipDocker && (!tc.darwin || tc.sudo || tc.unprivileged)) {
 				t.Fatalf("unexpected Docker enrollment: %s", log)
+			}
+			if !tc.service && !tc.sudo && bytes.Contains(log, []byte("sudo-system\n")) {
+				t.Fatalf("user-writable binary installation requested sudo: %s", log)
 			}
 			if applied {
 				if bytes.Contains(log, []byte("--restart")) || bytes.Contains(log, []byte("--force")) || bytes.Contains(log, []byte("--no-reload")) {
