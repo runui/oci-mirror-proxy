@@ -26,11 +26,11 @@ func TestDesktopRenderApplyRevert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !a.MergesConfig() || !a.RequiresRestart() || plan.Store != daemonconf.StoreDesktop || len(plan.Warnings) != 1 || len(plan.Files) != 1 {
+	if !a.RequiresRestart() || plan.Store != daemonconf.StoreDesktop || len(plan.Warnings) != 1 || len(plan.Files) != 1 {
 		t.Fatalf("unexpected Desktop plan: %+v", plan)
 	}
-	applier := daemonconf.Applier{StatePath: filepath.Join(root, "state", "state.json"), BackupDir: filepath.Join(root, "state", "backups")}
-	if _, err := applier.Apply(plan, a.MergesConfig()); err != nil {
+	applier := daemonconf.Applier{BackupDir: filepath.Join(root, "state", "backups")}
+	if _, err := applier.Apply(plan); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -44,11 +44,20 @@ func TestDesktopRenderApplyRevert(t *testing.T) {
 	if err := json.Unmarshal(data, &cfg); err != nil || !cfg.Debug || len(cfg.Mirrors) != 2 || cfg.Mirrors[0] != target.ProxyURL {
 		t.Fatalf("lost Engine settings: %s %v", data, err)
 	}
-	if _, err := applier.Revert(); err != nil {
+	target.Remove = true
+	plan, err = a.Render(t.Context(), target, "auto")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if data, err := os.ReadFile(path); err != nil || string(data) != string(original) {
-		t.Fatalf("revert changed original: %q %v", data, err)
+	if _, err := applier.Apply(plan); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil || !cfg.Debug || len(cfg.Mirrors) != 1 || cfg.Mirrors[0] != "https://existing.example" {
+		t.Fatalf("remove lost settings: %s %v", data, err)
 	}
 	if _, err := a.Render(t.Context(), target, "legacy"); err == nil {
 		t.Fatal("Desktop accepted an image-store override")

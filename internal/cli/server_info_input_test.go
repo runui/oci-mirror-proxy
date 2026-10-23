@@ -113,21 +113,21 @@ func TestServerInfoApplyAndRevertedUpdate(t *testing.T) {
 	}
 	apply("--if-managed")
 	hosts := filepath.Join(certs, "docker.io", "hosts.toml")
-	if _, err := os.Stat(hosts); !os.IsNotExist(err) {
-		t.Fatal("update enrolled unmanaged Docker")
+	if data, err := os.ReadFile(hosts); err != nil || !strings.Contains(string(data), "24817") {
+		t.Fatalf("update did not configure: %s %v", data, err)
 	}
 	apply()
-	apply("--if-managed")
-	if _, err := os.Stat(hosts); err != nil {
-		t.Fatal(err)
-	}
 	if code, _, errOut := run(t, append([]string{"dockerd", "revert"}, args...)...); code != 0 {
 		t.Fatalf("revert: %s", errOut)
 	}
-	apply("--if-managed")
-	if _, err := os.Stat(hosts); !os.IsNotExist(err) {
-		t.Fatal("update undid revert")
+	if data, err := os.ReadFile(hosts); err != nil || strings.Contains(string(data), "24817") {
+		t.Fatalf("remove failed: %s %v", data, err)
 	}
+	apply("--if-managed")
+	if data, err := os.ReadFile(hosts); err != nil || !strings.Contains(string(data), "24817") {
+		t.Fatalf("update must inspect actual configuration: %s %v", data, err)
+	}
+
 }
 
 func TestServerInfoRejectsUnsafeRoutes(t *testing.T) {

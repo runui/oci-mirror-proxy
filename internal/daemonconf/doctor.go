@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"slices"
-	"strings"
 	"time"
 )
 
@@ -28,13 +26,17 @@ type DiagnoseInput struct {
 	Expected []File
 	// MirrorSettings is a target capability, independent of the image store.
 	MirrorSettings bool
+	// Remove checks deconfiguration without requiring the retired proxy to answer.
+	Remove bool
 }
 
 // Diagnose runs read-only checks. It never changes anything.
 func Diagnose(ctx context.Context, in DiagnoseInput) []Check {
 	var checks []Check
 
-	checks = append(checks, checkProxy(ctx, in.ProxyURL))
+	if !in.Remove {
+		checks = append(checks, checkProxy(ctx, in.ProxyURL))
+	}
 
 	if in.InfoErr != nil {
 		checks = append(checks, Check{Name: "dockerd", OK: false, Detail: in.InfoErr.Error()})
@@ -48,7 +50,15 @@ func Diagnose(ctx context.Context, in DiagnoseInput) []Check {
 		if in.Info.RegistryConfig != nil {
 			mirrors = in.Info.RegistryConfig.Mirrors
 		}
-		ok := slices.ContainsFunc(mirrors, func(m string) bool { return strings.TrimRight(m, "/") == strings.TrimRight(in.ProxyURL, "/") })
+		ok := len(mirrors) > 0 && sameMirror(mirrors[0], in.ProxyURL)
+		if in.Remove {
+			ok = true
+			for _, mirror := range mirrors {
+				if sameMirror(mirror, in.ProxyURL) {
+					ok = false
+				}
+			}
+		}
 		detail := fmt.Sprintf("dockerd reports mirrors %v", mirrors)
 		checks = append(checks, Check{Name: "dockerd registry-mirrors", OK: ok, Detail: detail})
 	}

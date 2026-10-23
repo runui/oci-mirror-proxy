@@ -32,7 +32,17 @@ func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error {
 	return writeFileAtomic(path, data, perm, syncDirectory)
 }
 
+// WriteConfigAtomic preserves the existing owner's identity before publication.
+// Symlinks are refused rather than replaced with an unrelated regular file.
+func WriteConfigAtomic(path string, data []byte, perm fs.FileMode) error {
+	return writeAtomic(path, data, perm, syncDirectory, preserveOwner)
+}
+
 func writeFileAtomic(path string, data []byte, perm fs.FileMode, syncDir func(string) error) error {
+	return writeAtomic(path, data, perm, syncDir, func(string, *os.File) error { return nil })
+}
+
+func writeAtomic(path string, data []byte, perm fs.FileMode, syncDir func(string) error, prepare func(string, *os.File) error) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create directory %s: %w", dir, err)
@@ -42,6 +52,11 @@ func writeFileAtomic(path string, data []byte, perm fs.FileMode, syncDir func(st
 		return fmt.Errorf("create temp file in %s: %w", dir, err)
 	}
 	tmpName := tmp.Name()
+	if err := prepare(path, tmp); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
 	if err := writeAndSync(tmp, data, perm); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)

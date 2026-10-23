@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 const proxyURL = "http://127.0.0.1:24817"
@@ -189,118 +188,6 @@ func TestLegacyRenderRefusesInvalidJSON(t *testing.T) {
 	}
 	if _, err := (LegacyRenderer{DaemonJSON: path}).Render(dockerHubTarget(), readFrom(path)); err == nil {
 		t.Fatal("invalid daemon.json must not be rewritten")
-	}
-}
-
-func TestApplyAndRevertRestoresOriginalState(t *testing.T) {
-	root := t.TempDir()
-	certs := filepath.Join(root, "certs.d")
-	state := filepath.Join(root, "state", "state.json")
-	applier := Applier{StatePath: state, BackupDir: filepath.Join(root, "backups"), Now: time.Now}
-
-	plan, err := ContainerdRenderer{CertsDir: certs}.Render(dockerHubTarget(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	st, err := applier.Apply(plan, false)
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if len(st.Dirs) == 0 {
-		t.Fatal("apply must record the directories it created")
-	}
-	written, err := os.ReadFile(plan.Files[0].Path)
-	if err != nil || string(written) != string(plan.Files[0].Content) {
-		t.Fatalf("file not written correctly: %v", err)
-	}
-
-	if _, err := applier.Revert(); err != nil {
-		t.Fatalf("Revert: %v", err)
-	}
-	if _, err := os.Stat(plan.Files[0].Path); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatal("revert must remove the file that apply created")
-	}
-	if _, err := os.Stat(certs); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatal("revert must remove directories apply created")
-	}
-	if _, err := os.Stat(state); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatal("revert must delete the state file")
-	}
-	if _, err := applier.Revert(); !errors.Is(err, ErrNothingToRevert) {
-		t.Fatalf("second revert = %v, want ErrNothingToRevert", err)
-	}
-}
-
-func TestApplyRefusesUnmanagedFileWithoutForce(t *testing.T) {
-	root := t.TempDir()
-	certs := filepath.Join(root, "certs.d")
-	target := filepath.Join(certs, "docker.io", "hosts.toml")
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	userContent := []byte("server = \"https://user.example.com\"\n")
-	if err := os.WriteFile(target, userContent, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	applier := Applier{StatePath: filepath.Join(root, "state.json"), BackupDir: filepath.Join(root, "backups")}
-	plan, _ := ContainerdRenderer{CertsDir: certs}.Render(dockerHubTarget(), nil)
-
-	if _, err := applier.Apply(plan, false); !errors.Is(err, ErrUnmanaged) {
-		t.Fatalf("Apply without force = %v, want ErrUnmanaged", err)
-	}
-	if got, _ := os.ReadFile(target); string(got) != string(userContent) {
-		t.Fatal("refused apply must not touch the user's file")
-	}
-
-	if _, err := applier.Apply(plan, true); err != nil {
-		t.Fatalf("Apply with force: %v", err)
-	}
-	if _, err := applier.Revert(); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := os.ReadFile(target); string(got) != string(userContent) {
-		t.Fatalf("revert did not restore the user's original file: %q", got)
-	}
-}
-
-func TestReapplyIsIdempotent(t *testing.T) {
-	root := t.TempDir()
-	applier := Applier{StatePath: filepath.Join(root, "state.json"), BackupDir: filepath.Join(root, "backups")}
-	plan, _ := ContainerdRenderer{CertsDir: filepath.Join(root, "certs.d")}.Render(dockerHubTarget(), nil)
-
-	first, err := applier.Apply(plan, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := applier.Apply(plan, false)
-	if err != nil {
-		t.Fatalf("second apply must not require --force: %v", err)
-	}
-	if len(second.Files) != len(first.Files) {
-		t.Fatalf("file records changed on re-apply: %d -> %d", len(first.Files), len(second.Files))
-	}
-}
-
-func TestApplyRestoresFilesDroppedFromPlan(t *testing.T) {
-	root := t.TempDir()
-	applier := Applier{StatePath: filepath.Join(root, "state.json"), BackupDir: filepath.Join(root, "backups")}
-	certs := filepath.Join(root, "certs.d")
-
-	two := Target{ProxyURL: proxyURL, Routes: []Route{
-		{Alias: "docker.io", Origin: "https://registry-1.docker.io"},
-		{Alias: "ghcr.io", Origin: "https://ghcr.io"},
-	}}
-	planTwo, _ := ContainerdRenderer{CertsDir: certs}.Render(two, nil)
-	if _, err := applier.Apply(planTwo, false); err != nil {
-		t.Fatal(err)
-	}
-
-	planOne, _ := ContainerdRenderer{CertsDir: certs}.Render(dockerHubTarget(), nil)
-	if _, err := applier.Apply(planOne, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(planTwo.Files[1].Path); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatal("a file the new plan no longer needs must be removed")
 	}
 }
 

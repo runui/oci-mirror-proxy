@@ -48,6 +48,7 @@ type dockerFlags struct {
 	noReload   bool
 	serverInfo string
 	ifManaged  bool
+	remove     bool
 	verify     bool
 }
 
@@ -62,10 +63,10 @@ func (f *dockerFlags) register(fs *flag.FlagSet, withApplyFlags bool) {
 	fs.StringVar(&f.pidFile, "pid-file", "", "override the dockerd pid file path")
 	if withApplyFlags {
 		fs.BoolVar(&f.restart, "restart", false, "allow restarting Docker to activate settings (interrupts containers)")
-		fs.StringVar(&f.stateDir, "state-dir", "", "override where apply keeps its state and backups")
-		fs.BoolVar(&f.force, "force", false, "take over files that were not created by this tool (they are backed up first)")
+		fs.StringVar(&f.stateDir, "state-dir", "", "directory for configuration backups (under backups/)")
+		fs.BoolVar(&f.force, "force", false, "compatibility flag; existing configuration is always merged safely")
 		fs.BoolVar(&f.noReload, "no-reload", false, "do not signal dockerd after changing registry-mirrors")
-		fs.BoolVar(&f.ifManaged, "if-managed", false, "apply only if integration state still exists; never re-enroll after revert")
+		fs.BoolVar(&f.ifManaged, "if-managed", false, "compatibility flag; actual configuration is always inspected")
 		fs.BoolVar(&f.verify, "verify", false, "verify proxy, files and loaded mirror settings after applying")
 	}
 }
@@ -110,10 +111,8 @@ func cmdDockerd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	if flags.restart && flags.noReload {
 		return fmt.Errorf("--restart and --no-reload cannot be combined")
 	}
-	applier := daemonconf.Applier{
-		StatePath: filepath.Join(paths.StateDir, "dockerd-state.json"),
-		BackupDir: filepath.Join(paths.StateDir, "backups"),
-	}
+	flags.remove = action == "revert"
+	applier := daemonconf.Applier{BackupDir: filepath.Join(paths.StateDir, "backups")}
 
 	switch action {
 	case "plan":
@@ -125,48 +124,42 @@ func cmdDockerd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		printWarnings(stderr, plan)
 		return nil
 
-	case "apply":
-		if flags.ifManaged {
-			if _, err := os.Stat(applier.StatePath); errors.Is(err, os.ErrNotExist) {
-				fmt.Fprintln(stdout, "Docker integration skipped: no managed configuration (preserving the existing choice)")
-				return nil
-			} else if err != nil {
-				return err
-			}
-		}
+	case "apply", "revert":
 		plan, err := buildPlan(ctx, &flags, paths)
 		if err != nil {
 			return err
 		}
 		printWarnings(stderr, plan)
-		if len(plan.Files) == 0 {
-			printPlan(stdout, plan)
-			return nil
+		result, err := applier.Apply(plan)
+		for _, backup := range result.Backups {
+			fmt.Fprintln(stdout, "Backup:", backup)
 		}
-		st, err := applier.Apply(plan, flags.force || flags.adapter.MergesConfig())
 		if err != nil {
+			for _, f := range result.Files {
+				fmt.Fprintln(stderr, "configuration already changed:", f.Path)
+			}
 			return err
 		}
-		fmt.Fprintf(stdout, "applied %d file(s) using %s integration\n", len(st.Files), plan.Store)
-		for _, note := range plan.Notes {
-			fmt.Fprintln(stdout, "note:", note)
-		}
-		if err := activateIntegration(ctx, stdout, plan.NeedsReload, &flags); err != nil {
-			return err
+		if len(result.Files) == 0 {
+			fmt.Fprintln(stdout, "Already in the requested state; no files changed.")
+			for _, note := range plan.Notes {
+				fmt.Fprintln(stdout, "note:", note)
+			}
+		} else {
+			fmt.Fprintf(stdout, "%s: changed %d file(s) using %s integration\n", action, len(result.Files), plan.Store)
+			for _, note := range plan.Notes {
+				fmt.Fprintln(stdout, "note:", note)
+			}
+			if err := activateIntegration(ctx, stdout, result.NeedsReload, &flags); err != nil {
+				return err
+			}
 		}
 		if flags.verify {
 			return verifyIntegration(ctx, stdout, plan, &flags)
 		}
 		return nil
-
-	default: // revert
-		st, err := applier.Revert()
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "reverted %d file(s)\n", len(st.Files))
-		return activateIntegration(ctx, stdout, st.NeedsReload, &flags)
 	}
+	return nil
 }
 
 // buildPlan reads the proxy configuration and renders the files for the image store.
@@ -175,6 +168,10 @@ func buildPlan(ctx context.Context, flags *dockerFlags, paths dockerPaths) (daem
 	if flags.serverInfo != "" {
 		target, err := readServerTarget(flags)
 		if err != nil {
+			return daemonconf.Plan{}, err
+		}
+		target.Remove = flags.remove
+		if err := validateDockerTarget(target); err != nil {
 			return daemonconf.Plan{}, err
 		}
 		return flags.adapter.Render(ctx, target, flags.store)
@@ -187,7 +184,12 @@ func buildPlan(ctx context.Context, flags *dockerFlags, paths dockerPaths) (daem
 	if err != nil {
 		return daemonconf.Plan{}, err
 	}
-	return flags.adapter.Render(ctx, targetFor(cfg), flags.store)
+	target := targetFor(cfg)
+	target.Remove = flags.remove
+	if err := validateDockerTarget(target); err != nil {
+		return daemonconf.Plan{}, err
+	}
+	return flags.adapter.Render(ctx, target, flags.store)
 }
 
 func validateDockerTarget(target daemonconf.Target) error {
@@ -270,7 +272,7 @@ func verifyIntegration(ctx context.Context, out io.Writer, plan daemonconf.Plan,
 	}
 	for {
 		info, infoErr := daemonconf.FetchInfo(ctx, flags.adapter.Paths().DockerSocket)
-		checks := daemonconf.Diagnose(ctx, daemonconf.DiagnoseInput{ProxyURL: targetURL, Info: info, InfoErr: infoErr, Expected: plan.Files, MirrorSettings: flags.adapter.MergesConfig()})
+		checks := daemonconf.Diagnose(ctx, daemonconf.DiagnoseInput{ProxyURL: targetURL, Info: info, InfoErr: infoErr, Expected: plan.Files, MirrorSettings: plan.Store == daemonconf.StoreDesktop, Remove: flags.remove})
 		var failures []error
 		pending := false
 		for _, check := range checks {

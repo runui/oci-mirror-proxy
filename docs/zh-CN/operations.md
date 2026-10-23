@@ -20,8 +20,8 @@
 | `upstream add --id I --url U [--auth T --username N --password-ref REF --first-byte D --overall D --ca-file F --insecure-skip-verify --disabled]` | 添加上游。 |
 | `upstream enable\|disable\|remove --id I [--registry R]` | 启用、禁用或移除上游。 |
 | `dockerd plan [flags]` | 预览 `apply` 将写入的文件，不执行写入。 |
-| `dockerd apply [flags] [--force] [--no-reload]` | 写入 dockerd 配置，并按需向 dockerd 发送信号。 |
-| `dockerd revert [flags] [--no-reload]` | 撤销上一次 apply。 |
+| `dockerd apply [flags] [--no-reload]` | 写入 dockerd 配置，并按需向 dockerd 发送信号。 |
+| `dockerd revert [flags] [--no-reload]` | 从当前配置移除指定代理。 |
 | `doctor [flags]` | 只读检查代理、dockerd 是否可达以及配置是否就绪。任一检查失败则退出码为 1。 |
 | `version`、`help` | 显示版本、帮助。 |
 
@@ -37,7 +37,7 @@
 | `--daemon-json` | `/etc/docker/daemon.json` | `$XDG_CONFIG_HOME/docker/daemon.json` |
 | `--docker-socket` | `/var/run/docker.sock` | `$XDG_RUNTIME_DIR/docker.sock` |
 | `--pid-file` | `/var/run/docker.pid` | `$XDG_RUNTIME_DIR/docker.pid` |
-| `--state-dir` | `/var/lib/oci-mirror-proxy` | `$XDG_STATE_HOME/oci-mirror-proxy` |
+| `--state-dir`（备份父目录） | `/var/lib/oci-mirror-proxy` | `$XDG_STATE_HOME/oci-mirror-proxy` |
 
 `--store auto` 会向运行中的 dockerd 查询所用镜像存储后端。dockerd 未运行时，请传入 `--store containerd` 或 `--store legacy`。
 
@@ -98,7 +98,7 @@ Windows 引擎不支持 `--rootless`、`--pid-file`。
 
 1. 确保代理已运行，且 dockerd 能通过预期地址访问它。`doctor` 会检查这一点。
 2. 执行 `dockerd plan`，检查列出的文件。此时不会写入任何内容。
-3. 执行 `dockerd apply`。文件会原子写入，已有文件备份到 `<state-dir>/backups/`。除非传入 `--force`，否则拒绝覆盖非本工具创建的文件。
+3. 执行 `dockerd apply`。有变更才备份并原子写入，已有配置按内容合并，不依赖托管记录。
 4. 传统存储后端需要重载时，会向 dockerd 发送 `SIGHUP`。containerd 后端每次解析都会读取 `hosts.toml`，无需发送信号。
 5. 执行 `doctor`，所有检查都应通过。
 
@@ -107,7 +107,6 @@ Windows 引擎不支持 `--rootless`、`--pid-file`。
 **containerd 存储后端**：为每个仓库写入 `<certs-dir>/<alias>/hosts.toml`：
 
 ```toml
-# Managed by oci-mirror-proxy. Changes are overwritten by `oci-mirror-proxy dockerd apply`.
 server = "https://registry-1.docker.io"
 
 [host."http://127.0.0.1:24817"]
@@ -122,7 +121,7 @@ containerd 先尝试 `[host]` 条目，最后尝试 `server`，因此官方仓�
 
 ### 还原
 
-`dockerd revert` 从备份恢复各个文件；若文件原先不存在，则将其移除。还会移除 apply 创建且已为空的目录，并删除状态文件。备份会保留以便检查。
+`dockerd revert` 仅从当前文件中移除目标代理条目，保留其他设置及后续修改，不恢复历史快照、不删除配置目录。代理地址从所选服务配置中取得。containerd 移除操作也检查已不在订阅中的 registry 目录。备份仅供手动恢复，不参与配置判断。
 
 ## 重载与重启
 
@@ -162,5 +161,6 @@ rootless 默认使用 `$XDG_CONFIG_HOME/docker/daemon.json` 和 `$XDG_RUNTIME_DI
 | 拉取回退到 Docker Hub | 代理返回了 404 或 502。检查 `status` 和 `WARN` 日志。镜像缺失时回退属于正常行为。 |
 | 日志出现 `reload failed` | 配置验证失败，日志会说明问题，运行配置保持不变。 |
 | `secret ... not set or empty` | 代理进程环境中缺少 `password` 引用的环境变量，或其值为空。 |
-| `file exists and was not created by oci-mirror-proxy` | 文件由其他工具管理。先检查内容，如需接管再使用 `--force` 重试，覆盖前会先备份。 |
 | `cannot detect the image store` | 无法通过 `--docker-socket` 访问 dockerd。请启动 dockerd 或显式指定 `--store`。 |
+
+镜像配置不读取或写入状态记录。`--state-dir` 指定备份父目录；`--force`、`--if-managed` 保持接受，不改变安全合并行为。安装和更新使用同一套配置合并逻辑。

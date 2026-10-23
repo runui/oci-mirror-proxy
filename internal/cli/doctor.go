@@ -36,11 +36,15 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 
 	info, infoErr := daemonconf.FetchInfo(ctx, paths.DockerSocket)
 	var expected []daemonconf.File
+	mirrorSettings := false
 	if _, err := storeForDoctor(flags.store, info, infoErr); err == nil {
-		if plan, err := flags.adapter.Render(ctx, targetFor(cfg), flags.store); err == nil {
-			expected = plan.Files
-			printWarnings(stderr, plan)
+		plan, err := flags.adapter.Render(ctx, targetFor(cfg), flags.store)
+		if err != nil {
+			return fmt.Errorf("inspect Docker configuration: %w", err)
 		}
+		expected = plan.Files
+		mirrorSettings = plan.Store == daemonconf.StoreDesktop
+		printWarnings(stderr, plan)
 	}
 
 	checks := daemonconf.Diagnose(ctx, daemonconf.DiagnoseInput{
@@ -48,7 +52,7 @@ func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		Info:           info,
 		InfoErr:        infoErr,
 		Expected:       expected,
-		MirrorSettings: flags.adapter.MergesConfig(),
+		MirrorSettings: mirrorSettings,
 	})
 	failed := 0
 	for _, c := range checks {

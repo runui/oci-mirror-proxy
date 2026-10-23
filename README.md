@@ -215,5 +215,5 @@ Reloads preserve in-flight HTTP transfers and their resume candidates.
 - Client `Authorization` headers are never forwarded upstream.
 - The admin socket is protected by file permissions: its directory is `0700`, and
   the socket is `0600`.
-- Files that dockerd apply writes are backed up first, and revert restores them.
-  Files that this tool did not create are not overwritten without `--force`.
+- Mirror configuration is merged from actual files, without installation state.
+  Changed files are backed up and atomically replaced; `revert` removes only the selected proxy entries.

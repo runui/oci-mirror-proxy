@@ -39,7 +39,6 @@ func Defaults(rootless bool) (dockerintegration.Paths, error) {
 func (a Adapter) Paths() dockerintegration.Paths { return a.Locations }
 func (Adapter) Validate(context.Context) error   { return nil }
 func (Adapter) RequiresRestart() bool            { return false }
-func (Adapter) MergesConfig() bool               { return false }
 func (a Adapter) Render(ctx context.Context, t daemonconf.Target, store string) (daemonconf.Plan, error) {
 	var kind daemonconf.StoreKind
 	switch store {

@@ -109,7 +109,7 @@ docker compose down
 ```
 
 `down` 不会删除 `config/`。若永久移除代理，请先在宿主机执行
-`sudo oci-mirror-proxy dockerd revert`，恢复原有 Docker 配置。
+`sudo oci-mirror-proxy dockerd revert`，从当前 Docker 配置中移除代理镜像条目。
 
 ## 本地构建
 

@@ -44,7 +44,6 @@ func (a Adapter) command(ctx context.Context, args ...string) ([]byte, error) {
 
 func (a Adapter) Paths() dockerintegration.Paths { return a.Locations }
 func (Adapter) RequiresRestart() bool            { return true }
-func (Adapter) MergesConfig() bool               { return true }
 
 func (a Adapter) Validate(ctx context.Context) error {
 	// A local-looking endpoint is insufficient: also check its canonical path
@@ -107,6 +106,7 @@ func (a Adapter) Render(_ context.Context, t daemonconf.Target, store string) (d
 	p.Store = daemonconf.StoreDesktop
 	for i := range p.Files {
 		p.Files[i].CheckBefore = new(string(data))
+		p.Files[i].BeforeExists = err == nil
 		p.Files[i].Mode = 0o600
 		if info, err := os.Stat(a.Locations.DaemonJSON); err == nil {
 			p.Files[i].Mode = info.Mode().Perm()

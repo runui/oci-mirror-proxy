@@ -18,7 +18,7 @@ Options:
   --build        Compile release source instead of downloading a binary.
   --update       Replace the binary found in PATH, unless --prefix is supplied.
   --service      Install and start a systemd/OpenRC/launchd service (sudo as needed).
-  --skip-docker  Skip Docker setup or the uninstall managed-state safety check.
+  --skip-docker  Skip Docker setup.
                  Binary-only installs always skip Docker setup.
                  Service installs apply local Docker settings without restarting
                  Docker; updates only maintain integration that is still managed.
@@ -493,39 +493,8 @@ if [ "$action" = uninstall ]; then
     done
     [ ! -e "$destination" ] || [ -f "$destination" ] || die 'installed binary is not a regular file'
     config=/etc/oci-mirror-proxy/config.yaml
-    # A private root-owned state directory looks absent to an ordinary user.
-    # Check it with system privileges, even for a binary-only installation.
-    if [ "$os" = linux ] && [ "$skip_docker" = false ]; then
-        if [ "$(id -u)" -ne 0 ]; then
-            command -v sudo >/dev/null 2>&1 || die 'cannot check system Docker state; rerun as root or explicitly use --skip-docker'
-            needs_sudo=true
-        fi
-        system_state=$(run_system sh -c 'if [ -e "$1" ] || [ -L "$1" ]; then printf managed; fi' sh /var/lib/oci-mirror-proxy/dockerd-state.json) ||
-            die 'cannot check system Docker state; uninstall aborted'
-        [ "$system_state" != managed ] || die 'system Docker integration is managed; revert it manually first or use --skip-docker'
-    fi
     if [ "$skip_docker" = false ]; then
-        state=
-        if [ "$service" = false ]; then
-            case "$os" in
-                darwin) state="$HOME/Library/Application Support/oci-mirror-proxy/desktop-state/dockerd-state.json" ;;
-                linux) state="${XDG_STATE_HOME:-$HOME/.local/state}/oci-mirror-proxy/dockerd-state.json" ;;
-            esac
-        else
-            [ -z "$docker_identity_error" ] || die "$docker_identity_error; restore Docker manually or use --skip-docker"
-            if [ "$os" = darwin ]; then
-                state="$docker_home/Library/Application Support/oci-mirror-proxy/desktop-state/dockerd-state.json"
-            else
-                state=/var/lib/oci-mirror-proxy/dockerd-state.json
-            fi
-        fi
-        if run_system test -e "$state" || run_system test -L "$state"; then
-            # Existing state identifies files, not the proxy installation. Never
-            # revert another instance merely because its state directory exists.
-            die 'managed Docker state exists; run oci-mirror-proxy dockerd revert as the Docker user first, then retry (or explicitly use --skip-docker)'
-        fi
-    elif [ "$skip_docker" = true ]; then
-        printf 'Warning: Docker recovery skipped; settings may still reference this proxy.\n' >&2
+        printf 'Docker settings are preserved. Remove this proxy URL with dockerd revert before uninstalling if needed.\n'
     fi
     case "$manager" in
         systemd)
@@ -734,7 +703,7 @@ fi
 
 # Docker enrollment is deliberately outside service rollback: an integration
 # conflict must not undo an otherwise healthy proxy installation. Existing CLI
-# state is the authority on updates, so revert is never silently undone.
+# Actual Docker configuration is authoritative on installs and updates.
 if [ -n "$manager" ] && [ "$skip_docker" = false ]; then
     printf '\nConfiguring Docker...\n'
     # Keep the outer positional parameters intact: they belong to remote update.
@@ -754,7 +723,7 @@ if [ -n "$manager" ] && [ "$skip_docker" = false ]; then
             chmod 711 "$handoff_dir" || return 1
             chmod 600 "$server_info" || return 1
         fi
-        if [ "$update" = true ]; then set -- --if-managed; else set --; fi
+        set --
         if [ -n "$docker_user" ]; then
             run_docker_user env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_RUNTIME_DIR HOME="$docker_home" \
                 "$destination" dockerd apply --server-info "$server_info" --verify "$@"

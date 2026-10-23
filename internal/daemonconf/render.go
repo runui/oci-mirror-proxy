@@ -1,6 +1,5 @@
 // Package daemonconf configures dockerd to use the proxy. Rendering is pure and
-// produces a Plan; Applier is the only part that writes files, and it records
-// enough state to revert exactly what it changed.
+// produces a Plan; Applier backs up and atomically publishes actual changes.
 package daemonconf
 
 import (
@@ -30,6 +29,8 @@ type Target struct {
 	// ProxyURL is the address dockerd connects to, e.g. http://127.0.0.1:24817.
 	ProxyURL string
 	Routes   []Route
+	// Remove removes this URL from current configuration, never restores history.
+	Remove bool
 }
 
 // Route maps one registry as dockerd names it to its official origin.
@@ -38,14 +39,17 @@ type Route struct {
 	Origin string // e.g. https://registry-1.docker.io
 }
 
-// File is one file dockerd must see. Mode is applied when the file is written.
+// File is one file dockerd must see. Mode is used when creating a new file;
+// replacement preserves the existing file's permissions and owner.
 type File struct {
 	Path    string
 	Content []byte
 	Mode    fs.FileMode
-	// CheckBefore binds a merge to the bytes it read, so an intervening edit is
-	// not silently overwritten. Nil means the renderer did not request a check.
+	// CheckBefore binds a merge to the bytes it read. Every writable plan must
+	// supply a snapshot; an unchecked replacement is never safe for shared files.
 	CheckBefore *string
+	// BeforeExists distinguishes an absent file from an existing empty file.
+	BeforeExists bool
 }
 
 // Plan is the complete set of changes a renderer wants to make.

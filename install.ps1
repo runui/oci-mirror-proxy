@@ -67,7 +67,7 @@ aborts installation; NoService never prompts, regardless of this setting.
 .PARAMETER SkipDocker
 Do not configure Docker. NoService always skips Docker. Service updates only
 maintain integration that is still managed, so a previous revert is respected.
-On uninstall, bypass the managed Docker state check and leave settings unchanged.
+On uninstall, leave Docker settings unchanged.
 .EXAMPLE
 .\install.ps1
 Install the latest release as an automatic Windows service; approve UAC if asked.
@@ -526,7 +526,7 @@ function Connect-UserDocker {
         return
     }
     $arguments = @('dockerd', 'apply', '--server-info', $targetFile, '--verify')
-    if ($Update) { $arguments += '--if-managed' }
+
     try {
         $result = Invoke-InstallerNative $destination $arguments
         Show-NativeResult $result
@@ -545,16 +545,8 @@ function Assert-DockerUninstallSafe {
         Write-Warning 'Docker recovery skipped; settings may still reference this proxy.'
         return
     }
-    # State has no installation identity. Check in the original user's process,
-    # before UAC can select a different account; never revert another proxy.
-    foreach ($state in @(
-        (Join-Path $env:APPDATA 'oci-mirror-proxy\desktop-state\dockerd-state.json'),
-        (Join-Path $env:APPDATA 'oci-mirror-proxy\engine-state\dockerd-state.json')
-    )) {
-        if (Test-Path -LiteralPath $state) {
-            throw 'Managed Docker state exists; run oci-mirror-proxy dockerd revert as the Docker user first, then retry (or explicitly use -SkipDocker).'
-        }
-    }
+    # Uninstall does not infer ownership or restore a historical configuration.
+    Write-Host 'Docker settings are preserved. Use dockerd revert to remove the proxy URL before uninstalling if needed.'
 }
 
 function Remove-Installation {

@@ -66,7 +66,7 @@ func TestInstallerSyncsOfficialRemote(t *testing.T) {
 		{name: "Docker identity failure is a warning", service: true, sudo: true, invalidSudo: true},
 		{name: "Docker information failure is a warning", service: true, darwin: true, sudo: true, infoFail: true},
 		{name: "rootless Docker requires manual setup", service: true, unprivileged: true, rootlessDocker: true},
-		{name: "service update only maintains managed Docker", service: true, update: true},
+		{name: "service update merges actual Docker configuration", service: true, update: true},
 		{name: "macOS first install", darwin: true},
 		{name: "macOS service", darwin: true, service: true},
 		{name: "macOS service failure", darwin: true, service: true, serviceFail: true},
@@ -419,8 +419,8 @@ esac
 				if bytes.Contains(log, []byte("--restart")) || bytes.Contains(log, []byte("--force")) || bytes.Contains(log, []byte("--no-reload")) {
 					t.Fatalf("unsafe Docker flags: %s", log)
 				}
-				if tc.update && !bytes.Contains(log, []byte("--if-managed")) {
-					t.Fatalf("update reenrolls Docker: %s", log)
+				if bytes.Contains(log, []byte("--if-managed")) {
+					t.Fatalf("update depends on historical state: %s", log)
 				}
 				if strings.Index(string(log), "status --config") > strings.Index(string(log), "dockerd apply") {
 					t.Fatalf("applied before ready: %s", log)

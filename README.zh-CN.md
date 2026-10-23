@@ -115,7 +115,7 @@ Docker 不会自动重启；如需重启，请按脚本输出操作。
 Docker Desktop 的镜像加速设置仅支持 Docker Hub，因此可能跳过其他 registry。
 提示等待重启表示配置已保存但尚未生效；安装器不会自动重启 Docker 或中断运行中的容器。
 
-卸载保留配置、缓存及日志。如果检测到需要恢复的 Docker 设置，请按脚本提示处理后重试。
+卸载保留配置、缓存、日志及 Docker 设置。卸载代理前请按需运行 `dockerd revert` 移除对应镜像地址。
 手动恢复方法见[运维指南](docs/zh-CN/operations.md)。
 
 更多选项见 `sh install.sh --help` 或 `Get-Help .\install.ps1 -Full`。
@@ -173,6 +173,6 @@ CLI 默认更新仓库的 JSON 目录，也支持自定义 `--url`。每个源�
 - 凭据不会直接写入配置文件：密码使用 `env:NAME` 或 `file:/path` 等引用。日志和 `%v` 输出中的敏感信息会被脱敏。
 - 客户端的 `Authorization` 请求头不会被转发到上游。
 - 管理套接字通过文件权限保护：目录权限为 `0700`，套接字权限为 `0600`。
-- `dockerd apply` 写入文件前会先备份，`revert` 会恢复备份。除非指定 `--force`，否则不会覆盖非本工具创建的文件。
+- 镜像配置以实际文件为准，不依赖安装状态。仅在有变更时备份并原子替换；`revert` 只移除目标代理条目，保留其他配置。
 
 自动配置、生效及撤销参见[自动配置 Docker](docs/zh-CN/docker-integration.md)。

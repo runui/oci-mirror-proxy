@@ -20,6 +20,4 @@ type Adapter interface {
 	Activate(context.Context, bool) error
 	Validate(context.Context) error
 	RequiresRestart() bool
-	// MergesConfig allows backing up a shared file without taking it over blindly.
-	MergesConfig() bool
 }

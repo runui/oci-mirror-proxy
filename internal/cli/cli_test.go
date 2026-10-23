@@ -196,11 +196,39 @@ func TestDockerdApplyAndRevertRoundTrip(t *testing.T) {
 	if code, _, errOut := run(t, append([]string{"dockerd", "revert"}, args...)...); code != 0 {
 		t.Fatalf("revert: code = %d, stderr = %q", code, errOut)
 	}
-	if _, err := os.Stat(hosts); !os.IsNotExist(err) {
-		t.Fatal("revert must remove the file apply created")
+	if data, err := os.ReadFile(hosts); err != nil || strings.Contains(string(data), config.Default().ProxyURL()) {
+		t.Fatalf("revert must remove only the proxy host: %s %v", data, err)
 	}
-	if _, err := os.Stat(filepath.Join(certs)); !os.IsNotExist(err) {
-		t.Fatal("revert must remove the directories apply created")
+	if _, err := os.Stat(certs); err != nil {
+		t.Fatal("revert must preserve configuration directories")
+	}
+}
+
+func TestDockerdRevertUsesDefaultConfigWithoutNewArguments(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
+	t.Setenv("APPDATA", root)
+	t.Setenv("XDG_CONFIG_HOME", root)
+	path, err := config.DefaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(path, config.Default()); err != nil {
+		t.Fatal(err)
+	}
+	certs := filepath.Join(root, "certs.d")
+	// Only pre-existing offline target options are used; revert discovers the
+	// service configuration itself and never requires a new identity parameter.
+	args := []string{"--store", "containerd", "--certs-dir", certs, "--state-dir", filepath.Join(root, "backups"), "--no-reload"}
+	for _, action := range []string{"apply", "revert", "revert"} {
+		if code, _, stderr := run(t, append([]string{"dockerd", action}, args...)...); code != 0 {
+			t.Fatalf("%s: %s", action, stderr)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(certs, "docker.io", "hosts.toml"))
+	if err != nil || strings.Contains(string(data), config.Default().ProxyURL()) {
+		t.Fatalf("default revert failed: %s %v", data, err)
 	}
 }
 

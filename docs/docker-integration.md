@@ -42,7 +42,7 @@ the error distinguishes saved configuration from activation failure. Backups rem
 available. `doctor` checks both the configured file and the daemon's loaded mirror
 list; a successful API check alone does not prove a pull went through the proxy.
 
-On Linux, existing store-specific configuration, rootless options, `--force`, and
+On Linux, existing store-specific configuration, rootless options, and
 `--no-reload` remain available. Explicit file and store overrides also support
 offline configuration generation; ordinary use does not require them. Linux host
 configuration may require elevated permissions.
@@ -53,11 +53,18 @@ configuration may require elevated permissions.
 oci-mirror-proxy dockerd revert --restart
 ```
 
-Use `--restart` only when activation requires it. Revert restores original content
-and permissions, or removes a file created by the tool. Backups are retained.
-Managed files edited externally are not overwritten, even with `--force`; resolve
-the conflict before retrying. Operations use an exclusive state lock. After a
-crash, remove a stale lock only after confirming no integration operation is running.
+Use `--restart` only when activation requires it. Revert removes the selected
+proxy entries from current files, preserving unrelated settings and later edits.
+The service address is resolved from the existing default configuration lookup.
+Existing backups and legacy state files never determine behavior.
+
+Only changed files are backed up and atomically
+replaced. Repeated apply/revert does not rewrite an already-correct file. Invalid
+configuration and intervening edits are rejected, not overridden by `--force`.
+Operations lock each target file; after a crash, remove a stale `.oci-mirror-proxy.lock`
+only after confirming no integration operation is running. External editors that
+ignore the lock can still race the final replacement. Multi-file publication is
+not a transaction: an error lists files already changed and available backups.
 
 Revert before removing the proxy deployment. Restarting Docker may regenerate
 internal network identifiers and logs; restoring configuration is not a VM disk
@@ -68,6 +75,6 @@ snapshot rollback.
 Docker Desktop 4.95.0 with Engine 29.8.2 on Apple Silicon was verified with the
 containerd image store: automatic configuration, restart, ordinary Docker Hub
 image-name pulls through a controlled upstream (including a real image layer),
-diagnostics, repeated apply, and exact configuration restoration. This does not
+diagnostics, repeated apply, and configuration restoration (historical behavior). This does not
 establish support for every Desktop release, alternative macOS engines, BuildKit
 mirrors, or every public upstream. No automatic Desktop upgrade is performed.

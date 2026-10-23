@@ -21,8 +21,8 @@ instead of the legacy label. Reload does not interrupt in-flight HTTP transfers.
 | `upstream add --id I --url U [--auth T --username N --password-ref REF --first-byte D --overall D --ca-file F --insecure-skip-verify --disabled]` | Add an upstream. |
 | `upstream enable\|disable\|remove --id I [--registry R]` | Change an upstream. |
 | `dockerd plan [flags]` | Show the files that `apply` would write. Writes nothing. |
-| `dockerd apply [flags] [--force] [--no-reload]` | Write the dockerd configuration and signal dockerd. |
-| `dockerd revert [flags] [--no-reload]` | Undo the last apply. |
+| `dockerd apply [flags] [--no-reload]` | Write the dockerd configuration and signal dockerd. |
+| `dockerd revert [flags] [--no-reload]` | Remove the selected proxy from current configuration. |
 | `doctor [flags]` | Read-only checks: proxy reachable, dockerd reachable, configuration in place. Exits 1 on any failure. |
 | `version`, `help` | Self-explanatory. |
 
@@ -38,7 +38,7 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error.
 | `--daemon-json` | `/etc/docker/daemon.json` | `$XDG_CONFIG_HOME/docker/daemon.json` |
 | `--docker-socket` | `/var/run/docker.sock` | `$XDG_RUNTIME_DIR/docker.sock` |
 | `--pid-file` | `/var/run/docker.pid` | `$XDG_RUNTIME_DIR/docker.pid` |
-| `--state-dir` | `/var/lib/oci-mirror-proxy` | `$XDG_STATE_HOME/oci-mirror-proxy` |
+| `--state-dir` (backup parent) | `/var/lib/oci-mirror-proxy` | `$XDG_STATE_HOME/oci-mirror-proxy` |
 
 `--store auto` asks the running dockerd which image store it uses. Pass
 `--store containerd` or `--store legacy` when dockerd is not running.
@@ -110,8 +110,8 @@ Windows engines.
    `doctor` checks this step.
 2. Run `dockerd plan`. Read the files it shows. Nothing is written yet.
 3. Run `dockerd apply`. Files are written atomically, and any file that already
-   existed is backed up under `<state-dir>/backups/`. A file that this tool did not
-   create is refused unless you pass `--force`.
+   existed is backed up under `<state-dir>/backups/`.
+   Existing configuration is merged; no ownership or installation record is required.
 4. dockerd is signalled with `SIGHUP` when the legacy store needs it. The containerd
    store reads `hosts.toml` on every resolution, so no signal is needed.
 5. Run `doctor`. It should report every check as passing.
@@ -121,7 +121,6 @@ Windows engines.
 **containerd store**: one file per registry, `<certs-dir>/<alias>/hosts.toml`:
 
 ```toml
-# Managed by oci-mirror-proxy. Changes are overwritten by `oci-mirror-proxy dockerd apply`.
 server = "https://registry-1.docker.io"
 
 [host."http://127.0.0.1:24817"]
@@ -138,13 +137,19 @@ The legacy store supports mirrors for `docker.io` only. `plan`, `apply`, and
 `doctor` warn about other registries and skip their dockerd mirror configuration;
 the proxy's own routes are unchanged. Docker Hub configuration still proceeds.
 If no supported registries are configured, `plan` and `apply` succeed without
-writing files, changing existing apply state, or signalling dockerd.
+writing files or signalling dockerd.
+
+`--state-dir` selects the backup parent directory. `--force` and `--if-managed`
+remain accepted and do not change safe merge behavior. No integration state is
+read or written. Installer upgrades perform the same merge as initial setup.
 
 ### Reverting
 
-`dockerd revert` restores each file from its backup, or removes it when it did not
-exist before. It also removes directories that apply created, when they are empty,
-and deletes the state file. Backups are kept for inspection.
+`dockerd revert` removes only the selected proxy entries from
+current files, preserving other settings and subsequent edits. It never restores
+a historical snapshot or deletes configuration directories. The proxy address is derived from the selected service configuration.
+Containerd removal also inspects registry directories no longer in subscriptions.
+Backups are retained for explicit manual recovery, not configuration detection.
 
 ## Reload and restart
 
@@ -195,5 +200,4 @@ Logs go to stderr in `logfmt` format. Levels:
 | Pulls fall back to Docker Hub | The proxy answered 404 or 502. Check `status` and the `WARN` lines. Missing images legitimately fall back. |
 | `reload failed` in the log | The configuration file does not validate. The message names the problem. The running configuration is unchanged. |
 | `secret ... not set or empty` | The environment variable behind a `password` reference is missing in the proxy's environment. |
-| `file exists and was not created by oci-mirror-proxy` | Another tool owns that file. Read it, then rerun with `--force` if you want to take over. A backup is made first. |
 | `cannot detect the image store` | dockerd is not reachable at `--docker-socket`. Start it, or pass `--store`. |
