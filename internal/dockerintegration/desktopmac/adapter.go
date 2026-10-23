@@ -13,6 +13,7 @@ import (
 	"github.com/runui/oci-mirror-proxy/internal/daemonconf"
 	"github.com/runui/oci-mirror-proxy/internal/dockerintegration"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,7 +103,15 @@ func (a Adapter) Render(_ context.Context, t daemonconf.Target, store string) (d
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return daemonconf.Plan{}, err
 	}
-	p, err := (daemonconf.LegacyRenderer{DaemonJSON: a.Locations.DaemonJSON}).Render(t, func(string) ([]byte, error) { return data, err })
+	renderer := daemonconf.LegacyRenderer{DaemonJSON: a.Locations.DaemonJSON}
+	if endpoint, parseErr := url.Parse(t.ProxyURL); parseErr == nil && endpoint.Hostname() == "host.docker.internal" && endpoint.Port() != "" {
+		// Earlier Desktop installs advertised host loopback, which points into
+		// the Engine VM. Replace only same-port root endpoints; keep other mirrors.
+		for _, host := range []string{"127.0.0.1", "localhost", "[::1]"} {
+			renderer.ObsoleteMirrors = append(renderer.ObsoleteMirrors, endpoint.Scheme+"://"+host+":"+endpoint.Port())
+		}
+	}
+	p, err := renderer.Render(t, func(string) ([]byte, error) { return data, err })
 	if err != nil {
 		return p, err
 	}
@@ -134,6 +143,7 @@ func (a Adapter) Activate(ctx context.Context, restart bool) error {
 	if _, err := a.command(ctx, "desktop", "restart"); err != nil {
 		return err
 	}
+	var lastMismatch error
 	for {
 		if info, err := daemonconf.FetchInfo(ctx, a.Locations.DockerSocket); err == nil {
 			// Restart completion is not proof that the Engine loaded this file.
@@ -155,18 +165,25 @@ func (a Adapter) Activate(ctx context.Context, restart bool) error {
 				actual = info.RegistryConfig.Mirrors
 			}
 			if len(cfg.Mirrors) != len(actual) {
-				return fmt.Errorf("Docker restarted but did not load the expected mirror configuration")
-			}
-			for i, mirror := range cfg.Mirrors {
-				if strings.TrimRight(mirror, "/") != strings.TrimRight(actual[i], "/") {
-					return fmt.Errorf("Docker restarted but loaded different mirror settings")
+				lastMismatch = fmt.Errorf("Docker did not load the expected mirror configuration")
+			} else {
+				lastMismatch = nil
+				for i, mirror := range cfg.Mirrors {
+					if strings.TrimRight(mirror, "/") != strings.TrimRight(actual[i], "/") {
+						lastMismatch = fmt.Errorf("Docker loaded different mirror settings")
+						break
+					}
+				}
+				if lastMismatch == nil {
+					return nil
 				}
 			}
-			return nil
 		}
+		// Desktop can answer /info before the restarted Engine loads settings.
+		// A transient old mirror list is not a terminal activation failure.
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("waiting for Docker after restart: %w", ctx.Err())
+			return fmt.Errorf("waiting for Docker after restart: %w", errors.Join(ctx.Err(), lastMismatch))
 		case <-time.After(time.Second):
 		}
 	}

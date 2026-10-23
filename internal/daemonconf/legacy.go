@@ -17,6 +17,8 @@ import (
 // docker.io only, so other registries are skipped with warnings.
 type LegacyRenderer struct {
 	DaemonJSON string
+	// ObsoleteMirrors are explicitly superseded endpoints, not general fallbacks.
+	ObsoleteMirrors []string
 }
 
 // Store returns StoreLegacy.
@@ -67,7 +69,8 @@ func (r LegacyRenderer) Render(t Target, read ReadFunc) (Plan, error) {
 		merged = append(merged, t.ProxyURL)
 	}
 	for _, m := range mirrors {
-		if !sameMirror(m, t.ProxyURL) {
+		obsolete := slices.ContainsFunc(r.ObsoleteMirrors, func(old string) bool { return sameMirror(m, old) })
+		if !sameMirror(m, t.ProxyURL) && !obsolete {
 			merged = append(merged, m)
 		}
 	}

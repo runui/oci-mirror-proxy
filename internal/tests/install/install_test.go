@@ -215,7 +215,13 @@ case "$1" in
     init)
         if [ "$TEST_INIT_FAIL" = true ]; then echo 'mock init failure' >&2; exit 1; fi
         [ "$2" = --config ]
-        if [ "$#" -ne 3 ]; then [ "$#" -eq 5 ] && [ "$4" = --admin-socket ]; fi
+        if [ "$#" -ne 3 ]; then
+            [ "$4" = --admin-socket ]
+            if [ "$TEST_OS" = Darwin ]; then
+                [ "$#" -eq 9 ] && [ "$6" = --listen ] && [ "$7" = 0.0.0.0:24817 ] &&
+                    [ "$8" = --advertise ] && [ "$9" = host.docker.internal:24817 ]
+            else [ "$#" -eq 5 ]; fi
+        fi
         mkdir -p "$(dirname "$3")"
         cp "$TEST_CONFIG_TEMPLATE" "$3"
         ;;

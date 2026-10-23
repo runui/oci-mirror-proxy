@@ -210,6 +210,11 @@ Reloads preserve in-flight HTTP transfers and their resume candidates.
 
 - The registry API has no authentication, so it listens on `127.0.0.1` by default.
   A non-loopback `listen` exposes unauthenticated pulls to the network.
+  New macOS and Windows system installations use `0.0.0.0:24817` with
+  `advertise: host.docker.internal:24817` so Docker Desktop's Linux VM can reach
+  the host proxy. Host firewall policy determines LAN access. Existing proxy
+  configuration is preserved on upgrade; older loopback-only installations need
+  these addresses configured and the proxy service restarted.
 - Credentials never appear in the configuration file: a password is a reference
   such as `env:NAME` or `file:/path`. Secrets are redacted in logs and in `%v` output.
 - Client `Authorization` headers are never forwarded upstream.

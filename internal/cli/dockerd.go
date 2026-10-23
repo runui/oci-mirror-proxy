@@ -146,7 +146,7 @@ func cmdDockerd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 			return err
 		}
 		if len(result.Files) == 0 {
-			fmt.Fprintln(stdout, "Already in the requested state; no files changed.")
+			fmt.Fprintln(stdout, "Configuration files already match; no files changed.")
 			for _, note := range plan.Notes {
 				fmt.Fprintln(stdout, "note:", note)
 			}
@@ -155,9 +155,11 @@ func cmdDockerd(ctx context.Context, args []string, stdout, stderr io.Writer) er
 			for _, note := range plan.Notes {
 				fmt.Fprintln(stdout, "note:", note)
 			}
-			if err := activateIntegration(ctx, stdout, result.NeedsReload, &flags); err != nil {
-				return err
-			}
+		}
+		// Matching files do not prove the Engine loaded them. In particular,
+		// apply followed by apply --restart must still activate Desktop settings.
+		if err := activateIntegration(ctx, stdout, result.NeedsReload, &flags); err != nil {
+			return err
 		}
 		if flags.verify {
 			return verifyIntegration(ctx, stdout, plan, &flags)
@@ -316,7 +318,7 @@ func verifyIntegration(ctx context.Context, out io.Writer, plan daemonconf.Plan,
 }
 
 func activateIntegration(ctx context.Context, out io.Writer, needed bool, flags *dockerFlags) error {
-	if !needed {
+	if !needed && !flags.adapter.RequiresRestart() {
 		return nil
 	}
 	if flags.noReload || (flags.adapter.RequiresRestart() && !flags.restart) {

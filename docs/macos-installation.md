@@ -28,6 +28,15 @@ The daemon recreates its socket directory on startup. Older configurations with
 no explicit socket use `/var/run/oci-mirror-proxy/admin.sock` through the service's
 runtime environment.
 
+New system installations listen on `0.0.0.0:24817` and advertise
+`host.docker.internal:24817`. Docker Desktop's Engine runs in a Linux VM, where
+`127.0.0.1` refers to the VM rather than the Mac. The wildcard listener also
+accepts LAN connections when permitted by the host firewall; the registry proxy
+does not authenticate incoming pulls. Existing configurations are preserved.
+For an older loopback-only installation, back up the service configuration,
+set `listen: 0.0.0.0:24817` and `advertise: host.docker.internal:24817`, and restart
+the proxy service before applying Docker settings.
+
 The standard system administration socket is available to all local users without
 sudo. Its root-owned directory uses mode `0711` and the socket uses mode `0666`;
 these permissions are recreated at each startup. Local users can both inspect
@@ -62,6 +71,11 @@ docker pull hello-world:latest
 `--restart` restarts Docker Desktop and interrupts running containers. Without it,
 the settings are saved but activation remains pending. Use `dockerd revert
 --restart` to restore settings managed by the tool.
+
+An explicit `--restart` also works when the file is already correct but the
+Engine has not loaded it. When using `host.docker.internal`, `dockerd apply`
+automatically removes obsolete same-port loopback mirrors from older installations;
+unrelated mirrors and other Engine settings are preserved.
 
 Unlike Linux containerd integration, Docker Desktop configures Docker Hub through
 `registry-mirrors`; other registry routes are not automatically configured. The

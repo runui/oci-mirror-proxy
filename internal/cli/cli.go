@@ -209,6 +209,8 @@ func cmdInit(args []string, stderr, stdout io.Writer) error {
 	configPath := fs.String("config", "", "configuration file to create (default: per-user location)")
 	force := fs.Bool("force", false, "overwrite an existing file")
 	adminSocket := fs.String("admin-socket", "", "admin socket path to write into the configuration")
+	listen := fs.String("listen", "", "proxy listen address to write into the configuration")
+	advertise := fs.String("advertise", "", "client-facing proxy address to write into the configuration")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -225,6 +227,10 @@ func cmdInit(args []string, stderr, stdout io.Writer) error {
 	}
 	cfg := config.Default()
 	cfg.Admin.Socket = *adminSocket
+	if *listen != "" {
+		cfg.Listen = *listen
+	}
+	cfg.Advertise = *advertise
 	if err := config.Save(path, cfg); err != nil {
 		return err
 	}
