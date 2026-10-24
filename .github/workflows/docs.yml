@@ -6,11 +6,17 @@ on:
     paths:
       - 'apps/docs/**'
       - 'docs/demos/**'
+      - 'install.sh'
+      - 'install.ps1'
+      - 'subscriptions/**'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
       - 'apps/docs/**'
       - 'docs/demos/**'
+      - 'install.sh'
+      - 'install.ps1'
+      - 'subscriptions/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 

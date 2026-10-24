@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { GitBranch, Languages, Menu, X } from 'lucide-react';
+import { GitBranch, Languages, Menu, Moon, Sun, X } from 'lucide-react';
 import { useI18n } from 'fumadocs-ui/contexts/i18n';
 import { LanguageSelect } from 'fumadocs-ui/layouts/shared/slots/language-select';
 import { SearchTrigger } from 'fumadocs-ui/layouts/shared/slots/search-trigger';
@@ -35,7 +35,12 @@ export function SiteHeader({ menu }: { menu: ReactNode }) {
         <Link href={homeUrl(locale as Locale)} className="site-brand" aria-label={`${appName} — ${chinese ? '首页' : 'home'}`}><Brand /><span>{appName}</span></Link>
         <nav className="site-navigation" aria-label={chinese ? '主导航' : 'Primary'}><SiteLinks /></nav>
         <div className="site-tools">
-          <ThemeSwitch className="site-icon-button site-theme" />
+          <Popover>
+            <PopoverTrigger className="site-icon-button site-theme" aria-label={chinese ? '切换主题' : 'Change theme'}><Sun size={17} /><Moon size={17} /></PopoverTrigger>
+            <PopoverContent className="site-theme-menu" align="end" aria-label={chinese ? '主题' : 'Theme'}>
+              <ThemeSwitch mode="light-dark-system" className="site-theme-options" />
+            </PopoverContent>
+          </Popover>
           <SearchTrigger className="site-icon-button" />
           <LanguageSelect className="site-icon-button site-language"><Languages size={16} /><span>{chinese ? '中' : 'EN'}</span></LanguageSelect>
           <a className="site-icon-button site-github" href={githubUrl} target="_blank" rel="noopener noreferrer" aria-label="GitHub" title="GitHub"><GitBranch size={17} /></a>

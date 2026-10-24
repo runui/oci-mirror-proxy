@@ -2,8 +2,11 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { resolve, relative, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'parse5';
+import { repositoryAssets } from './prepare-assets.mjs';
+import { checkPageSeo, checkRobots, checkSeoHeaders, checkSitemap } from './check-seo.mjs';
 
 const origin = 'https://docs.example.test';
+const siteUrl = new URL(process.env.SITE_URL || 'https://ocimp.zmide.com');
 
 export function inspectHtml(html) {
   const ids = new Set();
@@ -12,10 +15,11 @@ export function inspectHtml(html) {
   function visit(node) {
     const attrs = Object.fromEntries((node.attrs ?? []).map(({ name, value }) => [name, value]));
     if (attrs.id) ids.add(attrs.id);
-    if (node.tagName) elements.push({ tag: node.tagName, attrs });
+    if (node.tagName) elements.push({ tag: node.tagName, attrs, text: (node.childNodes ?? []).filter((child) => child.nodeName === '#text').map((child) => child.value).join('') });
     for (const key of ['href', 'src', 'poster']) {
       if (attrs[key]) references.push(attrs[key]);
     }
+    if (node.tagName === 'meta' && ['og:image', 'twitter:image'].includes(attrs.property ?? attrs.name) && attrs.content) references.push(attrs.content);
     for (const child of node.childNodes ?? []) visit(child);
   }
   visit(parse(html));
@@ -50,7 +54,7 @@ export async function checkExport(directory, { siteChecks = true } = {}) {
     let url;
     try { url = new URL(reference, `${origin}${from}`); }
     catch { errors.push(`${from}: invalid URL ${reference}`); return; }
-    if (url.origin !== origin) return;
+    if (url.origin !== origin && url.origin !== siteUrl.origin) return;
     const target = findFile(url.pathname);
     if (!target) { errors.push(`${from}: missing target ${reference}`); return; }
     const hash = url.hash.slice(1).split(':~:')[0];
@@ -72,15 +76,48 @@ export async function checkExport(directory, { siteChecks = true } = {}) {
     }
   }
   if (siteChecks) {
-    const required = ['/index.html', '/zh-CN/index.html', '/404.html', '/api/search', '/sitemap.xml', '/favicon.svg', '/_headers', '/llms.txt', '/llms-full.txt', '/zh-CN/llms.txt', '/zh-CN/llms-full.txt'];
-    const slugs = (await readdir(new URL('../content/docs/', import.meta.url))).filter((name) => name.endsWith('.mdx') && !name.endsWith('.zh-CN.mdx')).map((name) => name === 'index.mdx' ? '' : name.slice(0, -4));
+    await Promise.all((await repositoryAssets()).map(async ({ path, source }) => {
+      const target = join(root, path);
+      if (!known.has(target)) errors.push(`Missing repository asset: /${path}`);
+      else {
+        const [output, original] = await Promise.all([readFile(target), readFile(source)]);
+        const expected = path.startsWith('subscriptions/') && path.endsWith('.json')
+          ? Buffer.from(JSON.stringify(JSON.parse(original.toString('utf8'))))
+          : original;
+        if (!output.equals(expected)) errors.push(`Repository asset differs from expected output: /${path}`);
+      }
+    }));
+    const required = ['/index.html', '/zh-CN/index.html', '/404.html', '/api/search', '/robots.txt', '/sitemap.xml', '/favicon.svg', '/_headers', '/llms.txt', '/llms-full.txt', '/zh-CN/llms.txt', '/zh-CN/llms-full.txt'];
+    const contentFiles = await readdir(new URL('../content/docs/', import.meta.url));
+    const slugs = contentFiles.filter((name) => name.endsWith('.mdx') && !name.endsWith('.zh-CN.mdx')).map((name) => name === 'index.mdx' ? '' : name.slice(0, -4));
+    const absolute = (path) => new URL(path, siteUrl).href;
+    const homeLanguages = { en: absolute('/'), 'zh-CN': absolute('/zh-CN/'), 'x-default': absolute('/') };
+    const seoPages = [
+      { path: '/', languages: homeLanguages },
+      { path: '/zh-CN/', languages: homeLanguages },
+      { path: '/404.html' },
+      { path: '/404/' },
+      { path: '/_not-found/' },
+    ];
     for (const locale of ['en', 'zh-CN']) {
       for (const slug of slugs) {
         const parts = slug ? `${slug}/` : '';
         required.push(`${locale === 'en' ? '' : '/zh-CN'}/docs/${parts}index.html`, `/llms.mdx/docs/${locale}/${parts}content.md`, `/og/docs/${locale}/${parts}image.png`);
+        const translated = contentFiles.includes(`${slug || 'index'}.zh-CN.mdx`);
+        const en = absolute(`/docs/${parts}`);
+        seoPages.push({
+          path: `${locale === 'en' ? '' : '/zh-CN'}/docs/${parts}`,
+          ...(locale === 'zh-CN' && !translated ? { fallbackPath: `/docs/${parts}` } : {
+            languages: { en, ...(translated ? { 'zh-CN': absolute(`/zh-CN/docs/${parts}`) } : {}), 'x-default': en },
+          }),
+        });
       }
     }
     for (const path of required) if (!known.has(join(root, path))) errors.push(`Missing required output: ${path}`);
+    for (const page of seoPages) {
+      const document = documents.get(findFile(page.path));
+      if (document) errors.push(...checkPageSeo(document, { ...page, siteUrl }));
+    }
     await Promise.all(files.map(async (file) => {
       if ((await stat(file)).size > 25 * 1024 * 1024) errors.push(`Cloudflare Pages file limit exceeded: ${relative(root, file)}`);
       if (/adaptive-downloads/.test(relative(root, file))) errors.push(`Excluded document was exported: ${relative(root, file)}`);
@@ -105,15 +142,17 @@ export async function checkExport(directory, { siteChecks = true } = {}) {
     const fallback = documents.get(join(root, 'zh-CN/docs/macos-installation/index.html'));
     if (fallback) {
       if (!fallback.elements.some(({ attrs }) => attrs.class?.includes('translation-notice'))) errors.push('Missing English fallback notice');
-      if (!fallback.elements.some(({ tag, attrs }) => tag === 'meta' && attrs.name === 'robots' && attrs.content.includes('noindex'))) errors.push('Fallback must be noindex');
-      if (!fallback.elements.some(({ tag, attrs }) => tag === 'link' && attrs.rel === 'canonical' && new URL(attrs.href).pathname === '/docs/macos-installation/')) errors.push('Fallback canonical must point to English');
     }
     const sitemap = join(root, 'sitemap.xml');
     if (known.has(sitemap)) {
       const text = await readFile(sitemap, 'utf8');
-      if (text.includes('/zh-CN/docs/macos-installation')) errors.push('Fallback must not be in sitemap');
+      errors.push(...checkSitemap(text, seoPages.filter((page) => page.languages).map((page) => ({ url: absolute(page.path), languages: page.languages }))));
       for (const match of text.matchAll(/<loc>(.*?)<\/loc>/g)) checkReference(new URL(match[1]).pathname, '/sitemap.xml');
     }
+    const robots = join(root, 'robots.txt');
+    if (known.has(robots)) errors.push(...checkRobots(await readFile(robots, 'utf8'), siteUrl));
+    const headers = join(root, '_headers');
+    if (known.has(headers)) errors.push(...checkSeoHeaders(await readFile(headers, 'utf8')));
   }
   return { errors: [...new Set(errors)], htmlCount: documents.size, fileCount: files.length };
 }
@@ -123,5 +162,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   if (result.errors.length) {
     console.error(result.errors.join('\n'));
     process.exitCode = 1;
-  } else console.log(`Validated ${result.htmlCount} HTML pages and ${result.fileCount} exported files: links, anchors, locales, search, Markdown, LLM indexes, OG images, sitemap, and fallback metadata.`);
+  } else console.log(`Validated ${result.htmlCount} HTML pages and ${result.fileCount} exported files: repository assets, links, anchors, locales, search, Markdown, LLM indexes, social metadata, JSON-LD, robots, sitemap coverage, and fallback metadata.`);
 }

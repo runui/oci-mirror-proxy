@@ -8,7 +8,7 @@ to files in the running service's `config.d` configuration directory. Start the 
 
 ```sh
 # With the proxy service running:
-oci-mirror-proxy remote update --url https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/subscriptions/mirrors.json --region cn
+oci-mirror-proxy remote update --url https://ocimp.zmide.com/subscriptions/mirrors.json --region cn
 oci-mirror-proxy remote list
 oci-mirror-proxy remote update --url https://example.com/mirrors.json --region cn,apac
 oci-mirror-proxy remote update --all --dry-run
@@ -16,15 +16,16 @@ oci-mirror-proxy remote update --all
 oci-mirror-proxy remote remove --url https://example.com/mirrors.json
 ```
 
-`update` adds a source on first use. The command above uses the catalog from the
-[GitHub repository](https://github.com/runui/oci-mirror-proxy):
+`update` adds a source on first use. The command above uses the
+[published catalog](/subscriptions/mirrors.json):
 
 ```text
-https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/subscriptions/mirrors.json
+https://ocimp.zmide.com/subscriptions/mirrors.json
 ```
 
 Use `--url` to select a catalog; omitting both `--url` and `--all` selects the
 CLI's built-in default.
+The published URL is explicit; it does not change the default bundled with the CLI.
 
 Omitting `--region` selects all catalog regions; specifying it filters the selection. Regions are exact labels;
 multiple labels select their union. `global` is not included automatically.
@@ -119,8 +120,8 @@ update may reintroduce the URL; disable it for a persistent local choice.
 
 ## Catalog format and trust
 
-The repository's [catalog](https://github.com/runui/oci-mirror-proxy/blob/master/subscriptions/mirrors.json) and
-[JSON Schema](https://github.com/runui/oci-mirror-proxy/blob/master/subscriptions/schema.json) define version 1. Mirrors have a
+The published [catalog](/subscriptions/mirrors.json) and
+[JSON Schema](/subscriptions/schema.json) define version 1. Mirrors have a
 display name, multiple region labels, and explicit per-registry endpoint URLs.
 No mirror ID is required. Unknown fields, duplicate JSON keys, unsupported
 versions, invalid regions, and invalid URLs are rejected. Generated endpoints

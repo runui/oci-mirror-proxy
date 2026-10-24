@@ -3,28 +3,28 @@ title: Installation
 description: Install, update, or uninstall on Linux, macOS, FreeBSD, and Windows.
 ---
 
-Install the latest release from [GitHub](https://github.com/runui/oci-mirror-proxy)
-without cloning the repository:
+Install the latest release without cloning the repository. The documentation site
+serves the installer; release binaries and source archives use the installer's
+built-in download source:
 
 ```sh
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --prefix "$HOME/.local"
-export PATH="$HOME/.local/bin:$PATH"
+curl -fsSL https://ocimp.zmide.com/install.sh | sh
 oci-mirror-proxy version
 ```
 
 Update an existing installation:
 
 ```sh
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- update --prefix "$HOME/.local"
+curl -fsSL https://ocimp.zmide.com/install.sh | sh -s -- update
 ```
 
 On Linux, run the installer with root privileges. It starts the proxy at boot
 and automatically connects local Docker; no separate Docker setup is needed:
 
 ```sh
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --service
+curl -fsSL https://ocimp.zmide.com/install.sh | sudo sh -s -- --service
 # Update the system installation and restart its service:
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- update --prefix /usr/local --service
+curl -fsSL https://ocimp.zmide.com/install.sh | sudo sh -s -- update --service
 ```
 
 The script downloads the matching Linux, macOS, or FreeBSD binary and verifies
@@ -36,12 +36,16 @@ same `/releases` and `/archive` layout). When piping the script, pass the variab
 to `sh`, not just to `curl`:
 
 ```sh
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/runui/oci-mirror-proxy sh -s -- --prefix "$HOME/.local"
+curl -fsSL https://ocimp.zmide.com/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/runui/oci-mirror-proxy sh
 ```
 
-The default prefix is `/usr/local`, which requires write permission. Existing
-configuration is preserved; without `--service`, no service is installed or restarted.
-Restart a running proxy manually after updating without `--service`.
+On Linux, macOS, and FreeBSD, the default binary path is `/usr/local/bin/oci-mirror-proxy`.
+No `--prefix` is needed. The installer requests sudo if that directory is not
+writable; without sudo, run as root or choose a writable custom directory.
+For an optional user-only installation, pass `--prefix "$HOME/.local"` and add
+`$HOME/.local/bin` to PATH. Existing configuration is preserved; without `--service`,
+no service is installed or restarted. Restart a running proxy manually after
+updating without `--service`.
 
 ## Platforms and Windows installation
 
@@ -58,16 +62,18 @@ On Windows, download and inspect the PowerShell installer, then run it in
 PowerShell. Approve the Windows administrator prompt when requested:
 
 ```powershell
-Invoke-WebRequest https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.ps1 -OutFile install.ps1
-.\install.ps1 -DownloadBaseUrl https://github.com/runui/oci-mirror-proxy
+Invoke-WebRequest https://ocimp.zmide.com/install.ps1 -OutFile install.ps1
+.\install.ps1
 # Update the installation and restart its service:
-.\install.ps1 update -DownloadBaseUrl https://github.com/runui/oci-mirror-proxy
+.\install.ps1 update
 ```
 
 The installer starts the proxy as a Windows service, enables startup at boot,
 automatically connects Docker Desktop, and adds the program to PATH.
 No separate Docker setup is needed. Open a new terminal to run `oci-mirror-proxy`
 directly. Updates preserve existing configuration. .NET Framework 4.x is required.
+The default binary directory is `%ProgramFiles%\oci-mirror-proxy\bin`; `-Prefix`
+is only needed for a custom installation directory.
 
 For troubleshooting and service management, see [operations](/docs/operations).
 For optional installation settings, run `Get-Help .\install.ps1 -Full`.
@@ -80,16 +86,19 @@ for service management and recovery from older root-owned user configurations.
 ## Update and uninstall
 
 ```sh
-sh install.sh update --prefix "$HOME/.local"
-sudo sh install.sh update --prefix /usr/local --service
-sh install.sh uninstall --prefix "$HOME/.local"
-sudo sh install.sh uninstall --prefix /usr/local
+sh install.sh update
+sudo sh install.sh update --service
+sh install.sh uninstall
 ```
 
 ```powershell
 .\install.ps1 update
 .\install.ps1 uninstall
 ```
+
+Unix updates find the existing binary in PATH; uninstall also detects managed
+services. If you used a custom directory and it cannot be detected, specify its
+original `--prefix` (Windows: `-Prefix`).
 
 Updates preserve existing configuration. If automatic Docker setup cannot finish,
 the installer keeps the proxy installed and prints recovery instructions.

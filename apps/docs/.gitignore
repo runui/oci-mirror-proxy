@@ -10,6 +10,9 @@
 /out/
 /build
 /public/demos/
+/public/install.sh
+/public/install.ps1
+/public/subscriptions/
 *.tsbuildinfo
 
 # misc

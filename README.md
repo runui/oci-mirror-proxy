@@ -15,15 +15,16 @@ with both containerd and classic graphdriver image stores. No push or local blob
 Install the latest release without cloning the repository:
 
 ```sh
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --prefix "$HOME/.local"
-export PATH="$HOME/.local/bin:$PATH"
+curl -fsSL https://ocimp.zmide.com/install.sh | sh
 oci-mirror-proxy version
 ```
+
+Installs to `/usr/local/bin` by default, requesting sudo if needed.
 
 On Linux, install a system service and automatically connect local Docker:
 
 ```sh
-curl -fsSL https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/install.sh | sudo env DOWNLOAD_BASE_URL=https://github.com/runui/oci-mirror-proxy sh -s -- --service
+curl -fsSL https://ocimp.zmide.com/install.sh | sudo sh -s -- --service
 ```
 
 See [installation](apps/docs/content/docs/installation.mdx) for Windows, macOS
@@ -46,7 +47,7 @@ GIFs are time-compressed previews; the original recordings preserve real timing.
 
 ## Documentation
 
-The documentation website lives in [apps/docs](apps/docs/README.md), independently
+Read the [documentation website](https://ocimp.zmide.com/docs/). It lives in [apps/docs](apps/docs/README.md), independently
 of the proxy. Its authoritative English and Chinese content is in
 [`apps/docs/content/docs`](apps/docs/content/docs).
 

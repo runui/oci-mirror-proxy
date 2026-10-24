@@ -7,7 +7,7 @@ description: 按区域订阅镜像目录，并保留本地选择。
 
 ```sh
 oci-mirror-proxy init
-oci-mirror-proxy remote update --region cn
+oci-mirror-proxy remote update --url https://ocimp.zmide.com/subscriptions/mirrors.json --region cn
 oci-mirror-proxy remote list
 oci-mirror-proxy remote update --url https://example.com/mirrors.json --region cn,apac
 oci-mirror-proxy remote update --all --dry-run
@@ -15,11 +15,13 @@ oci-mirror-proxy remote update --all
 oci-mirror-proxy remote remove --url https://example.com/mirrors.json
 ```
 
-`update` 同时负责首次添加。不传 `--url`、`--all` 时使用仓库默认地址：
+`update` 同时负责首次添加。上面的命令显式使用文档站发布的[镜像目录](/subscriptions/mirrors.json)：
 
 ```text
-https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/subscriptions/mirrors.json
+https://ocimp.zmide.com/subscriptions/mirrors.json
 ```
+
+不传 `--url`、`--all` 时仍使用 CLI 内置的默认订阅地址，不会自动改为文档站地址。
 
 首次更新需要 `--region`；之后省略时沿用该源的区域，再次指定时替换。
 多个区域取并集，一个站点可以声明多个区域。标签没有隐含层级，`global`
@@ -100,8 +102,8 @@ oci-mirror-proxy upstream enable --url https://docker.example.com
 
 ## JSON 格式与信任边界
 
-格式以仓库的 [mirrors.json](https://github.com/runui/oci-mirror-proxy/blob/master/subscriptions/mirrors.json) 和
-[schema.json](https://github.com/runui/oci-mirror-proxy/blob/master/subscriptions/schema.json) 为准。镜像站包含展示名称、多个区域、
+格式以发布的 [mirrors.json](/subscriptions/mirrors.json) 和
+[schema.json](/subscriptions/schema.json) 为准。镜像站包含展示名称、多个区域、
 以及明确的 registry/URL，不需要镜像站 ID。拒绝未知字段、重复 JSON 键、
 错误版本、未知区域和非法地址。生成上游使用无凭据的 `auth: {type: token}`，
 兼容匿名 Bearer 质询。

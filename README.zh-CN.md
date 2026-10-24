@@ -13,15 +13,16 @@
 无需克隆仓库，即可安装最新发布版本：
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- --prefix "$HOME/.local"
-export PATH="$HOME/.local/bin:$PATH"
+curl -fsSL https://ocimp.zmide.com/install.sh | sh
 oci-mirror-proxy version
 ```
+
+默认安装到 `/usr/local/bin`，需要时会请求 sudo。
 
 Linux 用户可安装系统服务并自动接入本机 Docker：
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- --service
+curl -fsSL https://ocimp.zmide.com/install.sh | sudo sh -s -- --service
 ```
 
 Windows、macOS 服务、更新、卸载和源码构建（需要 Go 1.26 或更新版本）见[安装指南](apps/docs/content/docs/installation.zh-CN.mdx)。
@@ -42,7 +43,7 @@ GIF 为加速预览，原始录制保留真实时间。
 
 ## 文档
 
-文档站位于 [apps/docs](apps/docs/README.md)，独立于代理部署。
+访问[文档站](https://ocimp.zmide.com/zh-CN/docs/)。站点位于 [apps/docs](apps/docs/README.md)，独立于代理部署。
 中英文正文统一维护在 [`apps/docs/content/docs`](apps/docs/content/docs)。
 
 - [概览与环境要求](apps/docs/content/docs/index.zh-CN.mdx)

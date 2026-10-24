@@ -1,12 +1,42 @@
 /llms.txt
   Content-Type: text/plain; charset=utf-8
+  X-Robots-Tag: noindex
 /llms-full.txt
   Content-Type: text/plain; charset=utf-8
+  X-Robots-Tag: noindex
 /zh-CN/llms.txt
   Content-Type: text/plain; charset=utf-8
+  X-Robots-Tag: noindex
 /zh-CN/llms-full.txt
   Content-Type: text/plain; charset=utf-8
+  X-Robots-Tag: noindex
 /llms.mdx/docs/*
   Content-Type: text/markdown; charset=utf-8
+  X-Robots-Tag: noindex
 /api/search
   Content-Type: application/json; charset=utf-8
+  X-Robots-Tag: noindex
+/install.sh
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=0, must-revalidate
+  X-Content-Type-Options: nosniff
+  X-Robots-Tag: noindex
+/install.ps1
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=0, must-revalidate
+  X-Content-Type-Options: nosniff
+  X-Robots-Tag: noindex
+/subscriptions/*
+  Cache-Control: public, max-age=0, must-revalidate
+  X-Content-Type-Options: nosniff
+  X-Robots-Tag: noindex
+/subscriptions/*.json
+  Content-Type: application/json; charset=utf-8
+/subscriptions/*.md
+  Content-Type: text/markdown; charset=utf-8
+/robots.txt
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=0, must-revalidate
+/sitemap.xml
+  Content-Type: application/xml; charset=utf-8
+  Cache-Control: public, max-age=0, must-revalidate

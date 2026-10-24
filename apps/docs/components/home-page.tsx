@@ -7,6 +7,8 @@ import { githubUrl } from '@/lib/shared';
 import { InstallPanel } from './install-panel';
 import { SiteHomeLayout } from './home-layout';
 import { homeContent } from '@/lib/home-content';
+import { homeStructuredData } from '@/lib/structured-data';
+import { JsonLd } from './json-ld';
 
 export function HomePage({ locale }: { locale: Locale }) {
   const text = homeContent[locale];
@@ -14,6 +16,7 @@ export function HomePage({ locale }: { locale: Locale }) {
   return (
     <SiteHomeLayout locale={locale}>
       <main id="main-content" className="home-frame">
+        <JsonLd data={homeStructuredData(locale)} />
         <section className="hero framed">
           <h1>{text.title}<br /><span>{text.titleAccent}</span></h1>
           <p className="hero-description">{text.description}</p>

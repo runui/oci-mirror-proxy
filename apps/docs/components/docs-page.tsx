@@ -5,6 +5,8 @@ import { getMDXComponents } from './mdx';
 import { isEnglishFallback, source } from '@/lib/source';
 import { getPageMarkdownUrl, githubUrl, gitConfig } from '@/lib/shared';
 import type { Locale } from '@/lib/i18n';
+import { documentationStructuredData } from '@/lib/structured-data';
+import { JsonLd } from './json-ld';
 
 export function DocumentationPage({ slug, locale }: { slug?: string[]; locale: Locale }) {
   const page = source.getPage(slug, locale);
@@ -15,6 +17,7 @@ export function DocumentationPage({ slug, locale }: { slug?: string[]; locale: L
 
   return (
     <DocsPage id="main-content" toc={page.data.toc} full={page.data.full}>
+      {!fallback && <JsonLd data={documentationStructuredData(page)} />}
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription className="mb-0">{page.data.description}</DocsDescription>
       {fallback && <aside className="translation-notice" aria-label="翻译提示">本页尚无中文翻译，以下显示英文原文。 <Link href={source.getPage(slug, 'en')!.url} hrefLang="en">Read in English →</Link></aside>}

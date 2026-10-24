@@ -4,7 +4,8 @@
 
 [`mirrors.json`](mirrors.json) is the repository's mirror catalog.
 [`schema.json`](schema.json) describes its JSON format and provides editor hints.
-For subscription commands, see [remote catalogs](../apps/docs/content/docs/remotes.mdx).
+The published catalog is available at <https://ocimp.zmide.com/subscriptions/mirrors.json>.
+For subscription commands, see [remote catalogs](https://ocimp.zmide.com/docs/remotes/).
 
 ## Format
 

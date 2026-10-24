@@ -78,6 +78,10 @@ a, button { -webkit-tap-highlight-color: transparent; }
 .site-language { width: auto; padding-inline: .5rem; font-family: var(--font-mono); font-size: .625rem; }
 .site-theme > svg:first-child, .dark .site-theme > svg:last-child { display: none; }
 .dark .site-theme > svg:first-child { display: block; }
+.site-theme-menu { width: auto; min-width: 0; padding: .5rem; border: 1px dotted var(--color-fd-border); border-radius: 0; background: var(--color-fd-background); }
+.site-theme-options { gap: .25rem; padding: 0; border: 0; border-radius: 0; }
+.site-theme-options button { width: 36px; height: 36px; border-radius: 0; }
+.site-theme-options svg { width: 16px; height: 16px; fill: none; }
 .site-menu-trigger { display: none; }
 .site-mobile-menu { width: min(300px, calc(100vw - 2rem)); padding: .75rem; border: 1px dotted var(--color-fd-border); border-radius: 0; background: var(--color-fd-background); }
 .site-menu-heading, .docs-drawer-heading { display: flex; align-items: center; justify-content: space-between; padding: .25rem .5rem .75rem; font-family: var(--font-mono); font-size: .75rem; color: var(--color-fd-primary); }

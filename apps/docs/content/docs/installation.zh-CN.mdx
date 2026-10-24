@@ -3,26 +3,25 @@ title: 安装
 description: 在 Linux、macOS、FreeBSD 和 Windows 上安装、更新与卸载。
 ---
 
-无需克隆仓库，即可安装最新发布版本：
+无需克隆仓库，即可安装最新发布版本。安装脚本由文档站提供，二进制程序和源码归档使用安装器内置的下载源：
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- --prefix "$HOME/.local"
-export PATH="$HOME/.local/bin:$PATH"
+curl -fsSL https://ocimp.zmide.com/install.sh | sh
 oci-mirror-proxy version
 ```
 
 更新已有安装：
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sh -s -- update --prefix "$HOME/.local"
+curl -fsSL https://ocimp.zmide.com/install.sh | sh -s -- update
 ```
 
 在 Linux 上，以 root 权限运行安装脚本。脚本会启动代理、设置开机自启并自动接入本机 Docker，无需额外配置：
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- --service
+curl -fsSL https://ocimp.zmide.com/install.sh | sudo sh -s -- --service
 # 更新系统安装并重启服务：
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | sudo sh -s -- update --prefix /usr/local --service
+curl -fsSL https://ocimp.zmide.com/install.sh | sudo sh -s -- update --service
 ```
 
 脚本会下载对应的 Linux、macOS 或 FreeBSD 二进制文件，并校验 SHA256。当没有匹配的二进制文件，或指定了 `--build` 时，会使用 Go 1.26.8 或更新版本（也可通过 Go 工具链自动下载）构建发布源码。使用 `--version v1.0.1` 可选择指定版本。
@@ -32,7 +31,7 @@ curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.
 Windows 用户可下载并检查 PowerShell 安装脚本后，在 PowerShell 中执行，需要时确认 Windows 管理员授权提示：
 
 ```powershell
-Invoke-WebRequest https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.ps1 -OutFile install.ps1
+Invoke-WebRequest https://ocimp.zmide.com/install.ps1 -OutFile install.ps1
 .\install.ps1
 # 更新安装并重启服务：
 .\install.ps1 update
@@ -40,6 +39,7 @@ Invoke-WebRequest https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/i
 
 安装器会启动 Windows 后台服务、设置开机自启、自动接入 Docker Desktop 并加入 PATH，无需额外配置 Docker。
 打开新终端后即可直接运行 `oci-mirror-proxy`；更新会保留已有配置。需要 .NET Framework 4.x。
+默认程序目录为 `%ProgramFiles%\oci-mirror-proxy\bin`，仅自定义安装目录时才需要 `-Prefix`。
 
 故障排查与服务管理见[运维指南](/zh-CN/docs/operations)。
 其他安装选项可运行 `Get-Help .\install.ps1 -Full` 查看。
@@ -51,24 +51,29 @@ Invoke-WebRequest https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/i
 如需使用下载镜像，将 `DOWNLOAD_BASE_URL` 设为镜像仓库根 URL（需保持相同的 `/releases` 和 `/archive` 布局）。通过管道执行脚本时，应将变量传给 `sh`，而不只是传给 `curl`：
 
 ```sh
-curl -fsSL https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/bin/oci-mirror-proxy sh -s -- --prefix "$HOME/.local"
+curl -fsSL https://ocimp.zmide.com/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/bin/oci-mirror-proxy sh
 ```
 
-默认安装目录为 `/usr/local`，需要写入权限。现有配置会保留；不使用 `--service` 时，不会安装或重启服务。不带 `--service` 更新后，需要手动重启正在运行的代理。
+Linux、macOS 和 FreeBSD 默认安装到 `/usr/local/bin/oci-mirror-proxy`，无需指定 `--prefix`。
+目录不可写时，脚本会请求 sudo；没有 sudo 时，请以 root 运行或选择可写的自定义目录。
+如需仅为当前用户安装，可选用 `--prefix "$HOME/.local"`，并将 `$HOME/.local/bin` 加入 PATH。
+现有配置会保留；不使用 `--service` 时，不会安装或重启服务。不带 `--service` 更新后，需要手动重启正在运行的代理。
 
 ## 更新与卸载
 
 ```sh
-sh install.sh update --prefix "$HOME/.local"
-sudo sh install.sh update --prefix /usr/local --service
-sh install.sh uninstall --prefix "$HOME/.local"
-sudo sh install.sh uninstall --prefix /usr/local
+sh install.sh update
+sudo sh install.sh update --service
+sh install.sh uninstall
 ```
 
 ```powershell
 .\install.ps1 update
 .\install.ps1 uninstall
 ```
+
+Unix 更新时从 PATH 查找已有程序，卸载时还会识别托管服务。若使用过自定义目录且无法自动识别，
+请指定原来的 `--prefix`（Windows 使用 `-Prefix`）。
 
 更新会保留已有配置。如果自动接入 Docker 未能完成，脚本会保留已安装的代理并给出恢复提示。
 Docker 不会自动重启；如需重启，请按脚本输出操作。
