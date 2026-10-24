@@ -2,27 +2,27 @@
 class OciMirrorProxy < Formula
   desc "Local, read-only registry mirror proxy for Docker"
   homepage "https://ocimp.zmide.com"
-  version "1.0.18"
+  version "1.0.19"
 
   on_macos do
     on_arm do
-      url "https://github.com/runui/oci-mirror-proxy/releases/download/v1.0.18/oci-mirror-proxy_v1.0.18_darwin_arm64.tar.gz"
-      sha256 "045860bbf0c3bc104cb698d5171c3286d34d9c4c43c9c1383cec600d32439875"
+      url "https://github.com/runui/oci-mirror-proxy/releases/download/v1.0.19/oci-mirror-proxy_v1.0.19_darwin_arm64.tar.gz"
+      sha256 "83ba84157735af94ccf9ba4b10371a16ad8cf165f0f72256091f62b49c9e6976"
     end
     on_intel do
-      url "https://github.com/runui/oci-mirror-proxy/releases/download/v1.0.18/oci-mirror-proxy_v1.0.18_darwin_amd64.tar.gz"
-      sha256 "9492b41b09916470248ed4011e70f1ee1ad460a5ab0082b684b1a3bbf6ab0fe3"
+      url "https://github.com/runui/oci-mirror-proxy/releases/download/v1.0.19/oci-mirror-proxy_v1.0.19_darwin_amd64.tar.gz"
+      sha256 "7b302d282751428110a7c681ebb3a57676379251eec537060e5fb7b4394c515e"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/runui/oci-mirror-proxy/releases/download/v1.0.18/oci-mirror-proxy_v1.0.18_linux_arm64.tar.gz"
-      sha256 "843612e7ec1518a6b8c5b5fa9ce24b03954ee5e8237ace0f1a2ade96aa7855e4"
+      url "https://github.com/runui/oci-mirror-proxy/releases/download/v1.0.19/oci-mirror-proxy_v1.0.19_linux_arm64.tar.gz"
+      sha256 "46f896a67db281e64ec384fe2f029edcd7b227a980a64669cbe2fc5959bb3e08"
     end
     on_intel do
-      url "https://github.com/runui/oci-mirror-proxy/releases/download/v1.0.18/oci-mirror-proxy_v1.0.18_linux_amd64.tar.gz"
-      sha256 "16cb81bca99c5f4893d0570c7d3f3c9a9f2f5062d22de7702ec50ac387b8562a"
+      url "https://github.com/runui/oci-mirror-proxy/releases/download/v1.0.19/oci-mirror-proxy_v1.0.19_linux_amd64.tar.gz"
+      sha256 "b46fbd264fc57b1a0c400bd0b1229e0f9aa5e379300b09c8a5bea1d5942a4671"
     end
   end
 
