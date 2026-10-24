@@ -3,7 +3,7 @@
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 [`mirrors.json`](mirrors.json) 是仓库提供的镜像目录；[`schema.json`](schema.json)
-描述 JSON 格式并提供编辑器提示。订阅命令见[远端订阅](../docs/zh-CN/remotes.md)。
+描述 JSON 格式并提供编辑器提示。订阅命令见[远端订阅](../apps/docs/content/docs/remotes.zh-CN.mdx)。
 
 ## 格式
 

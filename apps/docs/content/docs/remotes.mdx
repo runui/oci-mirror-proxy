@@ -1,0 +1,138 @@
+---
+title: Remote mirror catalogs
+description: Subscribe to regional mirror catalogs and manage local choices.
+---
+
+Subscribe to a JSON mirror catalog to select mirrors by region and save them
+to files in the running service's `config.d` configuration directory. Start the service before subscribing.
+
+```sh
+# With the proxy service running:
+oci-mirror-proxy remote update --url https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/subscriptions/mirrors.json --region cn
+oci-mirror-proxy remote list
+oci-mirror-proxy remote update --url https://example.com/mirrors.json --region cn,apac
+oci-mirror-proxy remote update --all --dry-run
+oci-mirror-proxy remote update --all
+oci-mirror-proxy remote remove --url https://example.com/mirrors.json
+```
+
+`update` adds a source on first use. The command above uses the catalog from the
+[GitHub repository](https://github.com/runui/oci-mirror-proxy):
+
+```text
+https://github.com/runui/oci-mirror-proxy/raw/refs/heads/master/subscriptions/mirrors.json
+```
+
+Use `--url` to select a catalog; omitting both `--url` and `--all` selects the
+CLI's built-in default.
+
+Omitting `--region` selects all catalog regions; specifying it filters the selection. Regions are exact labels;
+multiple labels select their union. `global` is not included automatically.
+`--all` updates configured sources with their respective saved selections and
+cannot be combined with `--url` or `--region`.
+
+List/update/remove accept `--admin-socket` to select the service.
+Update/remove accept `--dry-run` and `--no-reload`. A dry run previews changes without saving them.
+An empty selection is rejected unless `update --allow-empty` is explicit.
+`remove` always requires `--url`. There is no background updater.
+
+## Inspect a catalog
+
+`remote list` lists sources configured on the selected service. Use `remote show` to download a
+catalog and inspect its mirror sites without subscribing or creating local files:
+
+```sh
+oci-mirror-proxy remote show
+oci-mirror-proxy remote show --url https://example.com/mirrors.json
+oci-mirror-proxy remote show --url https://example.com/mirrors.json --region cn,apac
+```
+
+Omitting `--url` uses the built-in default catalog. Each endpoint gets a row with
+the site's name, complete region labels, registry, endpoint URL, and website
+(`-` when absent). Sites and endpoints retain catalog order; identical endpoints
+from different sites remain visible. Website query strings are redacted.
+
+Omitting `--region` or passing an empty value shows all sites. Multiple regions
+select their union; a matching site shows all its endpoints. Unknown region labels
+are errors and list the available labels. Empty results print `no matching mirrors`
+and exit successfully.
+
+`show` accepts only `--url`, `--region`, and help flags. It needs no local
+configuration or running proxy, writes no configuration, and never reloads the
+service. It displays catalog contents, not local enablement or endpoint health;
+mirror endpoints and websites are not contacted. Download and catalog validation
+rules are the same as for updates.
+
+## Files, atomic replacement, and backup
+
+For `/etc/oci-mirror-proxy/config.yaml`, each source owns a file in `config.d/`:
+
+```text
+config.d/example.com@0123456789abcdef.yaml
+config.d/example.com@0123456789abcdef.yaml.bak
+```
+
+Each source has a separate file, even when two URLs share a hostname. Keep the
+header comments containing the source URL and regions intact so the CLI can
+recognize the subscription.
+
+Protect these files if a source URL contains a private query token. CLI output
+redacts queries; generated files and backups have mode `0600`.
+
+Files are saved atomically; reload validates the complete configuration before
+applying it. Invalid saved configuration files can be repaired or removed through the CLI.
+The previous file is backed up to `.yaml.bak`; if the backup fails, the current
+file is not changed. First creation has no previous backup; unchanged updates
+rewrite neither current nor backup. Removing a source also creates a backup.
+Backups are not loaded as configuration. Restore manually by copying `.bak` to
+its original `.yaml` path, then run `reload`.
+
+With `--all`, successful sources remain updated when another source fails;
+any failure exits with `1`. Reload is attempted after processing the sources.
+The service must be running for file operations. `--no-reload` saves without
+applying; those files take effect after a successful reload or restart.
+If reload is rejected or times out, the CLI reports that files are saved but
+runtime application is unconfirmed, and exits with `1`. Saved files are kept;
+run `oci-mirror-proxy reload` or repeat the update to retry reloading.
+
+Reload does not interrupt existing HTTP transfers or change their resume
+candidates. Later HTTP requests, including those in the same `docker pull`,
+use the new configuration.
+
+## Local choices
+
+Upstreams merge by normalized URL **within each registry**. Removing one remote
+does not remove an endpoint still provided by another source. See
+[configuration merging](/docs/configuration#configd-drop-in-configuration-and-merging).
+
+```sh
+oci-mirror-proxy upstream disable --url https://docker.example.com
+oci-mirror-proxy upstream enable --url https://docker.example.com
+```
+
+These choices are saved in `config.d/local-overrides.yaml`, loaded last and
+applied only to existing URLs. They survive source updates without resurrecting
+URLs whose last source has disappeared. Custom timeout/auth/TLS options can also
+be placed there. Avoid editing generated source fields: the next update replaces
+them. `upstream remove --url` removes current definitions, but a later catalog
+update may reintroduce the URL; disable it for a persistent local choice.
+
+## Catalog format and trust
+
+The repository's [catalog](https://github.com/runui/oci-mirror-proxy/blob/master/subscriptions/mirrors.json) and
+[JSON Schema](https://github.com/runui/oci-mirror-proxy/blob/master/subscriptions/schema.json) define version 1. Mirrors have a
+display name, multiple region labels, and explicit per-registry endpoint URLs.
+No mirror ID is required. Unknown fields, duplicate JSON keys, unsupported
+versions, invalid regions, and invalid URLs are rejected. Generated endpoints
+use anonymous `auth: {type: token}` to support Bearer challenges, with no secrets.
+
+Downloads have a 30-second timeout, a 4 MiB decoded-body limit, and bounded
+redirects. HTTPS certificates are checked and HTTPS-to-HTTP redirects rejected.
+An explicitly supplied HTTP source warns. Standard proxy environment variables
+are supported. Catalogs cannot set credentials, local paths, TLS bypasses, or
+global proxy settings.
+
+A catalog is a trust input: digest verification protects addressed content, not
+the authenticity/freshness of mutable tag resolution. Region labels are not an
+uptime guarantee. Review the [catalog details](https://github.com/runui/oci-mirror-proxy/blob/master/subscriptions/README.md),
+provider limits, and local reachability before relying on a public mirror.

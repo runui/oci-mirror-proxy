@@ -1,0 +1,4 @@
+{
+  "title": "Documentation",
+  "pages": ["---Getting started---", "index", "installation", "docker", "macos-installation", "---Guides---", "docker-integration", "remotes", "operations", "---Reference---", "configuration", "architecture", "testing"]
+}

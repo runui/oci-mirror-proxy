@@ -1,0 +1,50 @@
+name: Documentation
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'apps/docs/**'
+      - 'docs/demos/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'apps/docs/**'
+      - 'docs/demos/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Static export and links
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/docs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/docs/package-lock.json
+      - run: npm ci
+      - run: npm run types:check
+      - run: npm test
+      - run: npm run build
+      - run: npm run check:links
+      - uses: actions/upload-artifact@v4
+        with:
+          name: documentation-static-export
+          path: apps/docs/out
+          retention-days: 7

@@ -8,3 +8,4 @@ config
 *.out
 coverage.html
 .DS_Store
+apps/docs
