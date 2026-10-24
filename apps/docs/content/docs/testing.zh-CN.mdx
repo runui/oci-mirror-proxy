@@ -3,10 +3,11 @@ title: 测试说明
 description: 运行项目检查，并使用真实二进制执行冒烟测试。
 ---
 
-## 运行检查
+<span id="运行检查" />
 
-执行 `make check` 运行格式检查、vet 和测试（包含竞态检测）。使用 `make fuzz`
-运行路径解析模糊测试，也可单独运行配置和目录的模糊测试：
+## 运行检查 [#running-checks]
+
+执行 `make check` 运行格式检查、vet 和测试（包含竞态检测）。使用 `make fuzz` 运行路径解析模糊测试，也可单独运行配置和目录的模糊测试：
 
 ```sh
 go test ./internal/config -run '^$' -fuzz FuzzDocumentMerge -fuzztime 30s
@@ -15,10 +16,11 @@ go test ./internal/cli -run '^$' -fuzz FuzzRemoteJSON -fuzztime 30s
 
 如需静态分析，请安装与项目 Go 工具链兼容的 `staticcheck`，再运行 `make staticcheck`。
 
-## 手动冒烟测试（真实二进制，无需 dockerd）
+<span id="手动冒烟测试真实二进制无需-dockerd" />
 
-独立运行的模拟仓库提供 `library/hello:latest`，可在没有 Docker 的情况下进行本地检查。
-启动后，等待 `$D/fake.out` 出现 `url=` 和 `blob=` 行，再执行客户端命令：
+## 手动冒烟测试（真实二进制，无需 dockerd） [#manual-smoke-test-real-binary-no-dockerd]
+
+独立运行的模拟仓库提供 `library/hello:latest`，可在没有 Docker 的情况下进行本地检查。启动后，等待 `$D/fake.out` 出现 `url=` 和 `blob=` 行，再执行客户端命令：
 
 ```sh
 make build
@@ -33,8 +35,8 @@ curl -i -H 'Range: bytes=0-11' "http://127.0.0.1:24817/v2/library/hello/blobs/$(
 dist/oci-mirror-proxy status --admin-socket $D/admin.sock
 ```
 
-## 检查 dockerd 集成
+<span id="检查-dockerd-集成" />
 
-在运行 dockerd 的 Linux 主机上，按[配置 dockerd](/zh-CN/docs/operations#配置-dockerd) 完成接入后，
-执行 `docker pull hello-world`。Rootless 网络配置见
-[Rootless dockerd](/zh-CN/docs/operations#rootless-dockerd)。
+## 检查 dockerd 集成 [#checking-dockerd-integration]
+
+在运行 dockerd 的 Linux 主机上，按[配置 dockerd](/zh-CN/docs/operations#setting-up-dockerd) 完成接入后，执行 `docker pull hello-world`。Rootless 网络配置见 [Rootless dockerd](/zh-CN/docs/operations#rootless-dockerd)。

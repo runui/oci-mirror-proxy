@@ -47,6 +47,7 @@ jobs:
       - run: npm ci
       - run: npm run types:check
       - run: npm test
+      - run: npm run check:i18n
       - run: npm run build
       - run: npm run check:links
       - uses: actions/upload-artifact@v4

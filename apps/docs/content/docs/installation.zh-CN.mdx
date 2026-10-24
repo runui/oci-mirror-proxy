@@ -26,6 +26,8 @@ curl -fsSL https://ocimp.zmide.com/install.sh | sudo sh -s -- update --service
 
 脚本会下载对应的 Linux、macOS 或 FreeBSD 二进制文件，并校验 SHA256。当没有匹配的二进制文件，或指定了 `--build` 时，会使用 Go 1.26.8 或更新版本（也可通过 Go 工具链自动下载）构建发布源码。使用 `--version v1.0.1` 可选择指定版本。
 
+## 支持平台与 Windows 安装 [#platforms-and-windows-installation]
+
 预编译程序支持以下平台：Linux 支持 `amd64`、`arm64`、`armv7`、`riscv64`；macOS、FreeBSD 和 Windows 支持 `amd64`、`arm64`。Windows 使用 `.zip`，其他系统使用 `.tar.gz`。
 
 Windows 用户可下载并检查 PowerShell 安装脚本后，在 PowerShell 中执行，需要时确认 Windows 管理员授权提示：
@@ -37,32 +39,23 @@ Invoke-WebRequest https://ocimp.zmide.com/install.ps1 -OutFile install.ps1
 .\install.ps1 update
 ```
 
-安装器会启动 Windows 后台服务、设置开机自启、自动接入 Docker Desktop 并加入 PATH，无需额外配置 Docker。
-打开新终端后即可直接运行 `oci-mirror-proxy`；更新会保留已有配置。需要 .NET Framework 4.x。
-默认程序目录为 `%ProgramFiles%\oci-mirror-proxy\bin`，仅自定义安装目录时才需要 `-Prefix`。
+安装器会启动 Windows 后台服务、设置开机自启、自动接入 Docker Desktop 并加入 PATH，无需额外配置 Docker。打开新终端后即可直接运行 `oci-mirror-proxy`；更新会保留已有配置。需要 .NET Framework 4.x。默认程序目录为 `%ProgramFiles%\oci-mirror-proxy\bin`，仅自定义安装目录时才需要 `-Prefix`。
 
-故障排查与服务管理见[运维指南](/zh-CN/docs/operations)。
-其他安装选项可运行 `Get-Help .\install.ps1 -Full` 查看。
+故障排查与服务管理见[运维指南](/zh-CN/docs/operations)。其他安装选项可运行 `Get-Help .\install.ps1 -Full` 查看。
 
-`--service` 选项支持 Linux 的 systemd/OpenRC 和 macOS 的 launchd 系统服务。
-不带 `--service` 的 sudo 安装会以经过验证的原用户身份初始化用户配置。
-服务管理与历史权限问题的修复参见 [macOS 安装指南](/zh-CN/docs/macos-installation)。
+`--service` 选项支持 Linux 的 systemd/OpenRC 和 macOS 的 launchd 系统服务。不带 `--service` 的 sudo 安装会以经过验证的原用户身份初始化用户配置。服务管理与历史权限问题的修复参见 [macOS 安装指南](/zh-CN/docs/macos-installation)。
 
 如需使用下载镜像，将 `DOWNLOAD_BASE_URL` 设为镜像仓库根 URL（需保持相同的 `/releases` 和 `/archive` 布局）。通过管道执行脚本时，应将变量传给 `sh`，而不只是传给 `curl`：
 
 ```sh
-curl -fsSL https://ocimp.zmide.com/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/bin/oci-mirror-proxy sh
+curl -fsSL https://ocimp.zmide.com/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/runui/oci-mirror-proxy sh
 ```
 
-Linux、macOS 和 FreeBSD 默认安装到 `/usr/local/bin/oci-mirror-proxy`，无需指定 `--prefix`。
-目录不可写时，脚本会请求 sudo；没有 sudo 时，请以 root 运行或选择可写的自定义目录。
-如需仅为当前用户安装，可选用 `--prefix "$HOME/.local"`，并将 `$HOME/.local/bin` 加入 PATH。
-现有配置会保留；不使用 `--service` 时，不会安装或重启服务。不带 `--service` 更新后，需要手动重启正在运行的代理。
+Linux、macOS 和 FreeBSD 默认安装到 `/usr/local/bin/oci-mirror-proxy`，无需指定 `--prefix`。目录不可写时，脚本会请求 sudo；没有 sudo 时，请以 root 运行或选择可写的自定义目录。如需仅为当前用户安装，可选用 `--prefix "$HOME/.local"`，并将 `$HOME/.local/bin` 加入 PATH。现有配置会保留；不使用 `--service` 时，不会安装或重启服务。不带 `--service` 更新后，需要手动重启正在运行的代理。
 
 ## Homebrew
 
-macOS（Apple Silicon 或 Intel）和 Linux（ARM64 或 x86-64）可通过 Homebrew 安装预编译版本。
-项目仓库同时作为 Homebrew tap，首次 `brew tap` 需要显式指定仓库 URL：
+macOS（Apple Silicon 或 Intel）和 Linux（ARM64 或 x86-64）可通过 Homebrew 安装预编译版本。项目仓库同时作为 Homebrew tap，首次 `brew tap` 需要显式指定仓库 URL：
 
 ```sh
 brew tap runui/oci-mirror-proxy https://github.com/runui/oci-mirror-proxy.git
@@ -70,9 +63,7 @@ brew install runui/oci-mirror-proxy/oci-mirror-proxy
 oci-mirror-proxy version
 ```
 
-Homebrew 会校验发布归档的 SHA256，无需安装 Go。不要使用 sudo 运行 Homebrew，
-也不要用 shell 安装脚本更新或卸载 Homebrew 管理的程序。
-如果已有安装脚本管理的系统服务，请先停止它，再启动 Homebrew 服务，避免默认端口冲突。
+Homebrew 会校验发布归档的 SHA256，无需安装 Go。不要使用 sudo 运行 Homebrew，也不要用 shell 安装脚本更新或卸载 Homebrew 管理的程序。如果已有安装脚本管理的系统服务，请先停止它，再启动 Homebrew 服务，避免默认端口冲突。
 
 首次启动前创建用户配置；如果已有配置，请跳过 `init`。不带 `--force` 的 `init` 不会覆盖已有配置：
 
@@ -83,13 +74,9 @@ oci-mirror-proxy status
 oci-mirror-proxy remote update
 ```
 
-服务以当前用户身份运行，使用默认的用户配置和管理套接字；macOS 在登录后启动，
-Linux 使用 systemd 用户服务。如不需要后台服务，可直接运行 `oci-mirror-proxy serve`。
-日志位于 `$(brew --prefix)/var/log/oci-mirror-proxy.log`。
-`remote update` 会添加默认镜像订阅；后续可用 `remote update --all` 更新所有已配置订阅，并保留各自的区域选择。
+服务以当前用户身份运行，使用默认的用户配置和管理套接字；macOS 在登录后启动，Linux 使用 systemd 用户服务。如不需要后台服务，可直接运行 `oci-mirror-proxy serve`。日志位于 `$(brew --prefix)/var/log/oci-mirror-proxy.log`。 `remote update` 会添加默认镜像订阅；后续可用 `remote update --all` 更新所有已配置订阅，并保留各自的区域选择。
 
-安装或启动 Homebrew 服务不会自动修改 Docker 设置。服务运行后，参照[自动配置 Docker](/zh-CN/docs/docker-integration)接入。
-macOS 上以登录 Docker Desktop 的用户执行，不要使用 sudo：
+安装或启动 Homebrew 服务不会自动修改 Docker 设置。服务运行后，参照[自动配置 Docker](/zh-CN/docs/docker-integration)接入。macOS 上以登录 Docker Desktop 的用户执行，不要使用 sudo：
 
 ```sh
 oci-mirror-proxy dockerd plan
@@ -97,8 +84,7 @@ oci-mirror-proxy dockerd apply
 oci-mirror-proxy doctor
 ```
 
-若提示等待 Docker 重启，请在合适的时机重启。显式使用 `dockerd apply --restart` 会重启 Docker Desktop 并中断运行中的容器。
-详情见 [macOS 安装指南](/zh-CN/docs/macos-installation#docker-desktop)。
+若提示等待 Docker 重启，请在合适的时机重启。显式使用 `dockerd apply --restart` 会重启 Docker Desktop 并中断运行中的容器。详情见 [macOS 安装指南](/zh-CN/docs/macos-installation#docker-desktop)。
 
 更新并重启已有的 Homebrew 服务：
 
@@ -108,8 +94,7 @@ brew upgrade runui/oci-mirror-proxy/oci-mirror-proxy
 brew services restart runui/oci-mirror-proxy/oci-mirror-proxy
 ```
 
-如果 Docker 已接入代理，请在**服务仍运行时**按对应平台的 [Docker 恢复说明](/zh-CN/docs/docker-integration)撤销接入，
-确认恢复后的 Docker 设置生效，再停止代理。macOS 示例：
+如果 Docker 已接入代理，请在**服务仍运行时**按对应平台的 [Docker 恢复说明](/zh-CN/docs/docker-integration)撤销接入，确认恢复后的 Docker 设置生效，再停止代理。macOS 示例：
 
 ```sh
 oci-mirror-proxy dockerd revert --restart
@@ -118,10 +103,11 @@ brew uninstall runui/oci-mirror-proxy/oci-mirror-proxy
 brew untap runui/oci-mirror-proxy
 ```
 
-`--restart` 会中断运行中的容器；未接入 Docker 时跳过恢复步骤。
-Homebrew 卸载会保留用户配置、缓存和日志，不会自动恢复 Docker 设置。
+`--restart` 会中断运行中的容器；未接入 Docker 时跳过恢复步骤。Homebrew 卸载会保留用户配置、缓存和日志，不会自动恢复 Docker 设置。
 
-## 更新与卸载
+<span id="更新与卸载" />
+
+## 更新与卸载 [#update-and-uninstall]
 
 ```sh
 sh install.sh update
@@ -134,31 +120,25 @@ sh install.sh uninstall
 .\install.ps1 uninstall
 ```
 
-Unix 更新时从 PATH 查找已有程序，卸载时还会识别托管服务。若使用过自定义目录且无法自动识别，
-请指定原来的 `--prefix`（Windows 使用 `-Prefix`）。
+Unix 更新时从 PATH 查找已有程序，卸载时还会识别托管服务。若使用过自定义目录且无法自动识别，请指定原来的 `--prefix`（Windows 使用 `-Prefix`）。
 
-更新会保留已有配置。如果自动接入 Docker 未能完成，脚本会保留已安装的代理并给出恢复提示。
-Docker 不会自动重启；如需重启，请按脚本输出操作。
+更新会保留已有配置。如果自动接入 Docker 未能完成，脚本会保留已安装的代理并给出恢复提示。Docker 不会自动重启；如需重启，请按脚本输出操作。
 
-支持 Windows PowerShell 5.1 和 PowerShell 7。Registry 兼容性警告本身不表示安装失败：
-Docker Desktop 的镜像加速设置仅支持 Docker Hub，因此可能跳过其他 registry。
-提示等待重启表示配置已保存但尚未生效；安装器不会自动重启 Docker 或中断运行中的容器。
+支持 Windows PowerShell 5.1 和 PowerShell 7。Registry 兼容性警告本身不表示安装失败：Docker Desktop 的镜像加速设置仅支持 Docker Hub，因此可能跳过其他 registry。提示等待重启表示配置已保存但尚未生效；安装器不会自动重启 Docker 或中断运行中的容器。
 
-卸载服务前会先从当前 Docker 用户的配置中移除本代理，保留其他镜像源和设置；清理失败则中止卸载。
-如需明确保留 Docker 设置，使用 Windows 的 `-SkipDocker` 或 Unix 的 `--skip-docker`。
-代理配置、缓存和日志会保留。仅卸载二进制时不会修改 Docker 设置。
-手动恢复方法见[运维指南](/zh-CN/docs/operations)。
+卸载服务前会先从当前 Docker 用户的配置中移除本代理，保留其他镜像源和设置；清理失败则中止卸载。如需明确保留 Docker 设置，使用 Windows 的 `-SkipDocker` 或 Unix 的 `--skip-docker`。代理配置、缓存和日志会保留。仅卸载二进制时不会修改 Docker 设置。手动恢复方法见[运维指南](/zh-CN/docs/operations)。
 
 更多选项见 `sh install.sh --help` 或 `Get-Help .\install.ps1 -Full`。
 
-## Docker 部署
+<span id="docker-部署" />
 
-Docker Engine 和 macOS Docker Desktop 用户可通过 [docker-compose.yaml](https://github.com/runui/oci-mirror-proxy/blob/master/docker-compose.yaml) 部署。准备好可写的
-配置目录后，执行 `docker compose up -d --no-build`。镜像支持 amd64/arm64，默认
-采用 bridge 网络并仅向主机回环地址发布端口，无需挂载 Docker socket。配置初始化、本地构建、
-宿主机 dockerd 接入方法见 [Docker 部署指南](/zh-CN/docs/docker)。
+## Docker 部署 [#docker-deployment]
 
-## 从源码构建
+Docker Engine 和 macOS Docker Desktop 用户可通过 [docker-compose.yaml](https://github.com/runui/oci-mirror-proxy/blob/master/docker-compose.yaml) 部署。准备好可写的配置目录后，执行 `docker compose up -d --no-build`。镜像支持 amd64/arm64，默认采用 bridge 网络并仅向主机回环地址发布端口，无需挂载 Docker socket。配置初始化、本地构建、宿主机 dockerd 接入方法见 [Docker 部署指南](/zh-CN/docs/docker)。
+
+<span id="从源码构建" />
+
+## 从源码构建 [#build-from-source]
 
 ```sh
 make build                                   # 生成 dist/oci-mirror-proxy

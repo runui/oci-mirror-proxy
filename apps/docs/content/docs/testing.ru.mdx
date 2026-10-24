@@ -1,0 +1,36 @@
+---
+title: Тестирование
+description: Проверки проекта и базовый тест настоящего исполняемого файла прокси.
+---
+
+## Запуск проверок [#running-checks]
+
+`make check` запускает проверку форматирования, vet и тесты, включая обнаружение гонок. `make fuzz` выполняет фаззинг анализатора путей; фаззинг конфигурации и каталогов можно запускать отдельно:
+
+```sh
+go test ./internal/config -run '^$' -fuzz FuzzDocumentMerge -fuzztime 30s
+go test ./internal/cli -run '^$' -fuzz FuzzRemoteJSON -fuzztime 30s
+```
+
+Для статического анализа установите версию `staticcheck`, совместимую с инструментарием Go проекта, и выполните `make staticcheck`.
+
+## Ручной базовый тест (реальный исполняемый файл, без dockerd) [#manual-smoke-test-real-binary-no-dockerd]
+
+Отдельный тестовый реестр предоставляет `library/hello:latest` для локальных проверок без Docker. Запустите его и дождитесь строк `url=` и `blob=` в `$D/fake.out` перед выполнением клиентских команд:
+
+```sh
+make build
+D=$(mktemp -d)
+dist/oci-mirror-proxy init --config $D/config.yaml
+go run ./internal/testutil/fakeregistry/cmd/fakeregistry > $D/fake.out &   # дождитесь строки url=
+dist/oci-mirror-proxy serve --config $D/config.yaml --admin-socket $D/admin.sock --log-level debug &
+dist/oci-mirror-proxy upstream add --admin-socket $D/admin.sock --id fake --url "$(sed -n 's/^url=//p' $D/fake.out)"
+curl -i http://127.0.0.1:24817/v2/
+curl -i http://127.0.0.1:24817/v2/library/hello/manifests/latest
+curl -i -H 'Range: bytes=0-11' "http://127.0.0.1:24817/v2/library/hello/blobs/$(sed -n 's/^blob=//p' $D/fake.out)"
+dist/oci-mirror-proxy status --admin-socket $D/admin.sock
+```
+
+## Проверка интеграции с dockerd [#checking-dockerd-integration]
+
+На хосте Linux с dockerd выполните [настройку dockerd](/ru/docs/operations#setting-up-dockerd), затем `docker pull hello-world`. Для rootless-сети см. [rootless dockerd](/ru/docs/operations#rootless-dockerd).

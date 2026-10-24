@@ -3,21 +3,15 @@ title: Overview
 description: A local, read-only registry mirror proxy for dockerd.
 ---
 
-A local, read-only registry mirror proxy for dockerd. It sits between dockerd and
-one or more user-chosen Registry v2 mirrors and adds what dockerd's built-in
-mirror support lacks:
+A local, read-only registry mirror proxy for dockerd. It sits between dockerd and one or more user-chosen Registry v2 mirrors and adds what dockerd's built-in mirror support lacks:
 
 - **Runtime management.** Add, remove and disable upstreams without restarting dockerd.
-- **Failure isolation.** A silent or failing mirror costs one timeout, then a
-  circuit breaker takes it out of rotation until a probe succeeds.
-- **Optional racing.** Hedged requests can answer from whichever mirror responds first.
-- **Resumable layers.** A layer that breaks mid-transfer continues from the same
-  byte offset on another mirror, and the daemon still verifies the digest.
-- **Safe fallback.** When the proxy cannot serve a request, dockerd falls back to
-  the official registry, so the proxy can never make a pull impossible.
+- **Failure isolation.** After the configured number of consecutive failures, a circuit breaker takes an unresponsive or failing mirror out of rotation until a probe succeeds.
+- **Configurable racing.** Hedged requests use the first acceptable response. Racing is enabled by default and can be disabled.
+- **Resumable layers.** A layer that breaks mid-transfer continues from the same byte offset on another mirror, and the daemon still verifies the digest.
+- **Official-registry fallback.** If the proxy cannot serve a request, dockerd can try the official registry through its configured fallback path. The registry must still be reachable and allow the pull.
 
-It supports both dockerd image stores: containerd (`hosts.toml`) and the classic
-graphdriver store (`daemon.json`, docker.io only).
+It supports both dockerd image stores: containerd (`hosts.toml`) and the classic graphdriver store (`daemon.json`, docker.io only).
 
 <Cards>
   <Card title="Installation" href="/docs/installation">Install a release and connect Docker.</Card>
@@ -26,45 +20,30 @@ graphdriver store (`daemon.json`, docker.io only).
 
 ## Preview
 
-oci-mirror-proxy completed in **508.0 s** versus **740.3 s** directly from the
-mirror: **1.46× as fast**, or **31.4% less time** in this preview.
+oci-mirror-proxy completed in **508.0 s** versus **740.3 s** directly from the mirror: **1.46× as fast**, or **31.4% less time** in this preview.
 
-| Direct mirror · 740.3 s | Through oci-mirror-proxy · 508.0 s |
-| :---: | :---: |
-| ![Direct mirror pull](/demos/direct-mirror.gif) | ![Proxy pull](/demos/oci-mirror-proxy.gif) |
+|             Direct mirror · 740.3 s              |         Through oci-mirror-proxy · 508.0 s          |
+| :----------------------------------------------: | :-------------------------------------------------: |
+| ![Direct mirror pull](/demos/direct-mirror.gif)  |     ![Proxy pull](/demos/oci-mirror-proxy.gif)      |
 | [asciinema recording](/demos/direct-mirror.cast) | [asciinema recording](/demos/oci-mirror-proxy.cast) |
 
-GIFs are time-compressed previews; the original recordings preserve real timing.
-See the [recording details](https://github.com/runui/oci-mirror-proxy/blob/master/docs/demos/README.md).
+GIFs are time-compressed previews; the original recordings preserve real timing. See the [recording details](https://github.com/runui/oci-mirror-proxy/blob/master/docs/demos/README.md).
 
 ## Status
 
-Supported features: the registry API for pulls, failover, circuit breaking,
-hedged requests, blob resumption, token and basic authentication, the admin socket,
-configuration reload, and dockerd setup with revert.
+Supported features: the registry API for pulls, failover, circuit breaking, hedged requests, blob resumption, token and basic authentication, the admin socket, configuration reload, and dockerd setup with revert.
 
 Not supported: push, a local blob cache, keychain secret backends, and metrics export.
 
 ## Requirements
 
-- Go 1.26 or newer, to build.
-- A local Docker Engine on Linux or Docker Desktop on macOS/Windows (Linux containers). See
-  [automatic Docker integration](/docs/docker-integration). Rootless dockerd needs the listen address
-  reachable from its network namespace, which is left to the operator (see
-  [rootless dockerd](/docs/operations#rootless-dockerd)).
+- Go 1.26.8 or newer, to build (or Go toolchain auto-download).
+- A local Docker Engine on Linux or Docker Desktop on macOS/Windows (Linux containers). See [automatic Docker integration](/docs/docker-integration). Rootless dockerd needs the listen address reachable from its network namespace, which is left to the operator (see [rootless dockerd](/docs/operations#rootless-dockerd)).
 
 ## Security notes
 
-- The registry API has no authentication, so it listens on `127.0.0.1` by default.
-  A non-loopback `listen` exposes unauthenticated pulls to the network.
-- Credentials never appear in the configuration file: a password is a reference
-  such as `env:NAME` or `file:/path`. Secrets are redacted in logs and in `%v` output.
+- The registry API has no authentication, so it listens on `127.0.0.1` by default. A non-loopback `listen` exposes unauthenticated pulls to the network.
+- Password values are not stored in the configuration file: a password is a reference such as `env:NAME` or `file:/path`. Secrets are redacted in logs and in `%v` output.
 - Client `Authorization` headers are never forwarded upstream.
-- The admin socket is protected by file permissions: its directory is `0700`, and
-  the socket is `0600` for private instances. Root services using the standard
-  `/run/oci-mirror-proxy/admin.sock` or `/var/run/oci-mirror-proxy/admin.sock`
-  endpoint allow all local users to access the management API (`0711` directory,
-  `0666` socket), including configuration changes and reloads. Only root can
-  replace the directory or socket; the management API is not exposed over TCP.
-- Mirror configuration is merged from actual files, without installation state.
-  Changed files are backed up and atomically replaced; `revert` removes only the selected proxy entries.
+- The admin socket is protected by file permissions: its directory is `0700`, and the socket is `0600` for private instances. Root services using the standard `/run/oci-mirror-proxy/admin.sock` or `/var/run/oci-mirror-proxy/admin.sock` endpoint allow all local users to access the management API (`0711` directory, `0666` socket), including configuration changes and reloads. Only root can replace the directory or socket; the management API is not exposed over TCP.
+- Mirror configuration is merged from actual files, without installation state. Changed files are backed up and atomically replaced; `revert` removes only the selected proxy entries.

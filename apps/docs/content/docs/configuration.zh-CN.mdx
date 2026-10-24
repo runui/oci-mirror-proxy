@@ -7,77 +7,75 @@ description: 配置字段、默认值、认证方式与安全重载。
 
 时长使用 Go 语法，例如 `500ms`、`5s`、`1m30s`。
 
-## `config.d` 配置目录与合并规则
+<span id="configd-配置目录与合并规则" />
 
-`config.d/` 用于存放补充配置文件（drop-in configuration），无需将所有设置写在主配置文件中。
-使用 `config.yaml` 时，自动加载同目录下 `config.d/` 中的 `*.yaml`、`*.yml` 文件。
-目录名由主配置文件名去掉扩展名后加 `.d` 得到，例如 `--config /path/proxy.yml`
-对应 `/path/proxy.d/`。主配置文件必须存在，补充配置目录可以不存在。
-先加载主配置文件，再按文件名字典序加载补充配置文件；保留的 `local-overrides.yaml` 最后加载。
-只读取第一层可见 YAML 文件，忽略隐藏文件、临时文件、备份和子目录。
+## `config.d` 配置目录与合并规则 [#configd-drop-in-configuration-and-merging]
 
-对象递归合并，后面显式声明的字段覆盖前面，包括 `false`；合并完成后统一填默认值。
-每个 registry 的上游按规范化 URL 合并去重：首次出现决定顺序，后面显式声明的选项
-覆盖相同 URL 的选项。`upstreams: []` 不清空先前来源。规范化主机/协议大小写、默认端口
-与根斜杠，有意义的路径保持不同。新配置无需上游 ID。
-拒绝重复键、多 YAML 文档、别名/合并键、未知字段和不支持的版本；任一配置文件有误时拒绝整份
-更新，继续使用原有运行配置。
+`config.d/` 用于存放补充配置文件（drop-in configuration），无需将所有设置写在主配置文件中。使用 `config.yaml` 时，自动加载同目录下 `config.d/` 中的 `*.yaml`、`*.yml` 文件。目录名由主配置文件名去掉扩展名后加 `.d` 得到，例如 `--config /path/proxy.yml` 对应 `/path/proxy.d/`。主配置文件必须存在，补充配置目录可以不存在。先加载主配置文件，再按文件名字典序加载补充配置文件；保留的 `local-overrides.yaml` 最后加载。只读取第一层可见 YAML 文件，忽略隐藏文件、临时文件、备份和子目录。
 
-`local-overrides.yaml` 只覆盖其他来源实际提供的 URL，禁用选择可跨更新保留，
-不会在最后一个来源被删除后重新引入地址。
-订阅文件与备份见[远端订阅](/zh-CN/docs/remotes)。
+对象递归合并，后面显式声明的字段覆盖前面，包括 `false`；合并完成后统一填默认值。每个 registry 的上游按规范化 URL 合并去重：首次出现决定顺序，后面显式声明的选项覆盖相同 URL 的选项。`upstreams: []` 不清空先前来源。规范化主机/协议大小写、默认端口与根斜杠，有意义的路径保持不同。新配置无需上游 ID。拒绝重复键、多 YAML 文档、别名/合并键、未知字段和不支持的版本；任一配置文件有误时拒绝整份更新，继续使用原有运行配置。
 
-## 顶层配置
+`local-overrides.yaml` 只覆盖其他来源实际提供的 URL，禁用选择可跨更新保留，不会在最后一个来源被删除后重新引入地址。订阅文件与备份见[远端订阅](/zh-CN/docs/remotes)。
 
-| 配置项 | 默认值 | 说明 |
-|---|---|---|
-| `version` | `1` | 配置格式版本，仅接受 `1`。 |
-| `log_level` | `info` | 可选日志级别：`debug`、`info`、`warn`、`error`。支持 reload；显式指定的 `serve --log-level` 优先于配置文件。默认不写入生成的配置。 |
-| `listen` | `127.0.0.1:24817` | 仓库 API 的监听地址。 |
-| `advertise` | 自动推导 | dockerd 连接代理时使用的 `host:port`。当 `listen` 使用通配地址时，实际部署应显式设置此项，且必须指定具体主机。 |
-| `admin.socket` | 用户级默认路径 | 管理套接字路径。默认为 `$XDG_RUNTIME_DIR/oci-mirror-proxy/admin.sock`；未设置 `XDG_RUNTIME_DIR` 时使用用户缓存目录。 |
-| `registries` | `docker.io` | 仓库别名到仓库配置的映射。 |
+<span id="顶层配置" />
+
+## 顶层配置 [#top-level]
+
+| 配置项         | 默认值            | 说明                                                                                                                               |
+| -------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `version`      | `1`               | 配置格式版本，仅接受 `1`。                                                                                                         |
+| `log_level`    | `info`            | 可选日志级别：`debug`、`info`、`warn`、`error`。支持 reload；显式指定的 `serve --log-level` 优先于配置文件。默认不写入生成的配置。 |
+| `listen`       | `127.0.0.1:24817` | 仓库 API 的监听地址。                                                                                                              |
+| `advertise`    | 自动推导          | dockerd 连接代理时使用的 `host:port`。当 `listen` 使用通配地址时，实际部署应显式设置此项，且必须指定具体主机。                     |
+| `admin.socket` | 用户级默认路径    | 管理套接字路径。默认为 `$XDG_RUNTIME_DIR/oci-mirror-proxy/admin.sock`；未设置 `XDG_RUNTIME_DIR` 时使用用户缓存目录。               |
+| `registries`   | `docker.io`       | 仓库别名到仓库配置的映射。                                                                                                         |
 
 设置了 `advertise` 时，dockerd 使用该地址；否则使用 `listen`，其中通配主机地址（`0.0.0.0`、`::`）会映射为 `127.0.0.1`。
 
 调试时可手动添加顶层 `log_level: debug`，再执行 `oci-mirror-proxy reload`。debug 日志通过 `request_id` 关联请求，包含路由策略、候选上游、尝试耗时和状态、熔断跳过、竞速启动与最终选中的上游。`upstream` 是旧配置的标签（未设置时为 URL），`via` 是配置的镜像站基础 URL；`upstream hit` 表示收到成功响应，`upstream selected` 表示实际选用该响应（竞速中其他成功响应不一定被采用）。这不代表镜像站内部缓存命中。耗时记录到收到响应头，不代表整个镜像层下载完成；断点续传尝试包含 `range` 字段。上游尝试的调试日志不记录认证头或重定向签名 URL。
 
-## 仓库
+<span id="仓库" />
+
+## 仓库 [#registries]
 
 `registries` 下的每个键都是仓库别名：
 
 - `docker.io` 使用 dockerd 期望的根路径 `/v2/`。
 - 其他别名（例如 `ghcr.io`）使用带前缀的路径 `/ghcr.io/v2/`。别名必须是不带端口的主机名，`v2` 为保留名称。
 
-| 配置项 | 默认值 | 说明 |
-|---|---|---|
-| `origin` | `docker.io` 为 `https://registry-1.docker.io`，其他为 `https://<alias>` | 官方仓库地址。代理无法处理请求时，dockerd 回退至此。 |
-| `race.enabled` | `true` | 为此仓库启用对冲请求。 |
-| `race.delay` | `500ms` | 启用竞速后，在此时间内未收到响应则启动另一个上游请求。必须为正值。 |
-| `race.max_parallel` | `3` | 每个请求的最大并发尝试数。启用竞速时至少为 2。 |
-| `breaker.threshold` | `3` | 连续失败多少次后跳过该上游。 |
-| `breaker.cooldown` | `30s` | 上游被跳过后，等待多久再允许一次探测请求。 |
-| `upstreams` | `[]` | 有序上游列表，排在前面的优先尝试。 |
+| 配置项              | 默认值                                                                  | 说明                                                               |
+| ------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `origin`            | `docker.io` 为 `https://registry-1.docker.io`，其他为 `https://<alias>` | 官方仓库地址。代理无法处理请求时，dockerd 回退至此。               |
+| `race.enabled`      | `true`                                                                  | 为此仓库启用对冲请求。                                             |
+| `race.delay`        | `500ms`                                                                 | 启用竞速后，在此时间内未收到响应则启动另一个上游请求。必须为正值。 |
+| `race.max_parallel` | `3`                                                                     | 每个请求的最大并发尝试数。启用竞速时至少为 2。                     |
+| `breaker.threshold` | `3`                                                                     | 连续失败多少次后跳过该上游。                                       |
+| `breaker.cooldown`  | `30s`                                                                   | 上游被跳过后，等待多久再允许一次探测请求。                         |
+| `upstreams`         | `[]`                                                                    | 有序上游列表，排在前面的优先尝试。                                 |
 
 竞速默认开启，最多并发尝试 3 个上游。额外请求可能触发上游限流；可设置 `race.enabled: false` 关闭。
 
-## 上游镜像源
+<span id="上游镜像源" />
 
-| 配置项 | 默认值 | 说明 |
-|---|---|---|
-| `id` | 省略 | 可选的旧版标签，在仓库内唯一，由 1 至 63 个字母、数字、`-` 或 `_` 组成。URL 才是上游身份，新配置无需 ID。 |
-| `url` | 必填 | Registry v2 服务的基础 URL。支持 `http` 或 `https`，不得包含查询参数、片段或凭据，允许 `/hub` 等基础路径。 |
-| `disabled` | `false` | 在文件中保留该上游，但不参与请求调度。 |
-| `timeouts.connect` | `10s` | 建立连接的最长时间，包括 TCP 连接和 TLS 握手。慢速或经过代理的网络可适当增大。 |
-| `timeouts.first_byte` | `5s` | 等待响应头的最长时间，也是遇到无响应上游时的等待开销。 |
-| `timeouts.overall` | `60s` | 元数据请求（manifest、标签列表和 referrers）的总时限，不限制 blob 传输。 |
-| `auth.type` | `none` | `none`、`basic` 或 `token`，见下文。 |
-| `auth.username` | | `basic` 的用户名，或令牌服务要求认证时 `token` 使用的用户名。 |
-| `auth.password` | | 敏感信息引用，例如 `env:MIRROR_PASSWORD` 或 `file:/run/secrets/mirror`。不接受明文密码。 |
-| `tls.ca_file` | | 此上游的额外 CA 证书文件，会追加到系统根证书集合。 |
-| `tls.insecure_skip_verify` | `false` | 禁用此上游的证书校验。除测试外应避免使用。 |
+## 上游镜像源 [#upstreams]
 
-### 认证类型
+| 配置项                     | 默认值  | 说明                                                                                                       |
+| -------------------------- | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `id`                       | 省略    | 可选的旧版标签，在仓库内唯一，由 1 至 63 个字母、数字、`-` 或 `_` 组成。URL 才是上游身份，新配置无需 ID。  |
+| `url`                      | 必填    | Registry v2 服务的基础 URL。支持 `http` 或 `https`，不得包含查询参数、片段或凭据，允许 `/hub` 等基础路径。 |
+| `disabled`                 | `false` | 在文件中保留该上游，但不参与请求调度。                                                                     |
+| `timeouts.connect`         | `10s`   | 分别用于 TCP 连接和 TLS 握手阶段的超时。慢速或经过代理的网络可适当增大。                                   |
+| `timeouts.first_byte`      | `5s`    | 等待响应头的最长时间，也是遇到无响应上游时的等待开销。                                                     |
+| `timeouts.overall`         | `60s`   | 元数据请求（manifest、标签列表和 referrers）的总时限，不限制 blob 传输。                                   |
+| `auth.type`                | `none`  | `none`、`basic` 或 `token`，见下文。                                                                       |
+| `auth.username`            |         | `basic` 的用户名，或令牌服务要求认证时 `token` 使用的用户名。                                              |
+| `auth.password`            |         | 敏感信息引用，例如 `env:MIRROR_PASSWORD` 或 `file:/run/secrets/mirror`。不接受明文密码。                   |
+| `tls.ca_file`              |         | 此上游的额外 CA 证书文件，会追加到系统根证书集合。                                                         |
+| `tls.insecure_skip_verify` | `false` | 禁用此上游的证书校验。除测试外应避免使用。                                                                 |
+
+<span id="认证类型" />
+
+### 认证类型 [#authentication-types]
 
 - **`none`**：请求不携带凭据。
 - **`basic`**：每次请求都通过 HTTP Basic 认证发送 `username` 和 `password`。
@@ -85,29 +83,32 @@ description: 配置字段、默认值、认证方式与安全重载。
 
 凭据仅用于其所属上游，不会发送给其他上游，也不会转发客户端自身的 `Authorization` 请求头。
 
-### 敏感信息引用
+<span id="敏感信息引用" />
+
+### 敏感信息引用 [#secret-references]
 
 `password` 接受引用，而非密码本身：
 
-| 引用 | 解析结果 |
-|---|---|
-| `env:NAME` | 环境变量 `NAME` 的值，必须已设置且非空。 |
-| `file:/path` | 文件内容，移除末尾换行。 |
+| 引用         | 解析结果                                 |
+| ------------ | ---------------------------------------- |
+| `env:NAME`   | 环境变量 `NAME` 的值，必须已设置且非空。 |
+| `file:/path` | 文件内容，移除末尾换行。                 |
 
 引用在构建上游时解析，因此缺失环境变量会在启动或重载时报错，而不是等到第一次请求时才报错。
 
-## 默认超时的实际效果
+<span id="默认超时的实际效果" />
 
-使用默认配置时，列表首位的无响应上游会让每次请求等待约 5 秒，直到触发熔断。连续三次失败后，该上游会被跳过 30 秒，然后进行一次探测。启用竞速并使用默认参数时，无响应上游带来的等待约为 500 毫秒，因为到达此延迟后会启动下一个上游请求。
+## 默认超时的实际效果 [#timing-defaults-in-practice]
 
-## 修改配置
+关闭竞速时，已建立连接但始终不返回响应头的上游，可能让每次请求多等待约 5 秒，直到触发熔断。连续三次此类失败后，该上游会被跳过 30 秒，再允许一次探测。TCP 连接和 TLS 握手各有 10 秒超时。默认启用竞速：500 毫秒内没有可用响应时就启动下一个候选，无需等待第一个候选完整超时；总延迟仍取决于其他候选的表现。
+
+<span id="修改配置" />
+
+## 修改配置 [#changing-the-configuration]
 
 - **通过 CLI 或管理 API**：变更经过验证后保存，无需重启即可生效。验证失败时，文件和运行配置保持不变。新增上游写入主文件，启用/禁用选择保存到 `local-overrides.yaml`。
 - **手动编辑**：修改文件后，执行 `oci-mirror-proxy reload` 或向进程发送 `SIGHUP`。验证失败的文件会被拒绝，继续使用原有运行配置。
 - **监听地址**：修改 `listen` 后会记录日志，重启后才生效。
 - **正在传输的请求**：重载不打断已有 HTTP 请求，也不改变其续传候选。同一次 `docker pull` 中之后新发起的 HTTP 请求使用新配置。
 
-Adaptive blob switching is enabled by default (10s window, 262144 bytes/s minimum,
-5s probe timeout, 3 probe rounds). Set `adaptive.enabled: false` to disable it.
-Interrupted blob downloads resume automatically. These features do not split a
-blob into parallel chunks or change Docker layer-download concurrency.
+默认启用 blob 自适应切换（检测窗口 10 秒、最低速度 262144 字节/秒、探测超时 5 秒、3 轮探测）。设置 `adaptive.enabled: false` 可关闭。blob 下载中断后会自动续传。这些功能不会将 blob 拆成多个并行分片，也不会改变 Docker 同时下载镜像层的数量。

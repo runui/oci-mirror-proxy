@@ -6,10 +6,10 @@ description: 为 dockerd 提供的本地只读镜像仓库代理。
 为 dockerd 提供的本地只读镜像仓库代理。它位于 dockerd 与用户选择的一个或多个 Registry v2 镜像源之间，补充 dockerd 内置镜像源机制所缺少的能力：
 
 - **运行时管理。** 无需重启 dockerd，即可添加、移除和禁用上游镜像源。
-- **故障隔离。** 无响应或故障镜像源只会消耗一次超时等待，随后熔断器将其移出候选列表，直到探测成功。
-- **可选竞速。** 通过对冲请求，使用最先返回有效响应的镜像源。
+- **故障隔离。** 无响应或故障镜像源连续失败达到配置的阈值后，熔断器会将其移出候选列表，直到探测成功。
+- **可配置竞速。** 通过对冲请求，使用最先返回有效响应的镜像源；默认启用，也可关闭。
 - **镜像层断点续传。** 传输中断后，可从同一字节偏移量切换到另一个镜像源继续下载，摘要仍由 daemon 校验。
-- **安全回退。** 代理无法处理请求时，dockerd 会回退到官方仓库，因此代理不会让原本可用的镜像拉取变得不可用。
+- **官方仓库回退。** 代理无法处理请求时，dockerd 可通过已配置的回退路径尝试官方仓库；官方仓库仍需可访问并允许该次拉取。
 
 支持 dockerd 的两种镜像存储后端：containerd（`hosts.toml`）和传统 graphdriver（`daemon.json`，仅限 docker.io）。
 
@@ -18,36 +18,40 @@ description: 为 dockerd 提供的本地只读镜像仓库代理。
   <Card title="Docker 部署" href="/zh-CN/docs/docker">通过 Docker Compose 运行代理。</Card>
 </Cards>
 
-## Preview
+## 效果预览 [#preview]
 
-本次预览中通过本项目耗时 **508.0 秒**，
-直接使用镜像站耗时 **740.3 秒**：速度约为 **1.46 倍**，总耗时减少 **31.4%**。
+本次预览中通过本项目耗时 **508.0 秒**，直接使用镜像站耗时 **740.3 秒**：速度约为 **1.46 倍**，总耗时减少 **31.4%**。
 
-| 直接使用镜像站 · 740.3 秒 | 通过 oci-mirror-proxy · 508.0 秒 |
-| :---: | :---: |
-| ![直接拉取](/demos/direct-mirror.gif) | ![通过代理拉取](/demos/oci-mirror-proxy.gif) |
+|          直接使用镜像站 · 740.3 秒          |        通过 oci-mirror-proxy · 508.0 秒        |
+| :-----------------------------------------: | :--------------------------------------------: |
+|    ![直接拉取](/demos/direct-mirror.gif)    |  ![通过代理拉取](/demos/oci-mirror-proxy.gif)  |
 | [asciinema 录制](/demos/direct-mirror.cast) | [asciinema 录制](/demos/oci-mirror-proxy.cast) |
 
-GIF 为加速预览，原始录制保留真实时间。
-[录制说明](https://github.com/runui/oci-mirror-proxy/blob/master/docs/demos/README.zh-CN.md)提供了录制工具和背景信息。
+GIF 为加速预览，原始录制保留真实时间。 [录制说明](https://github.com/runui/oci-mirror-proxy/blob/master/docs/demos/README.zh-CN.md)提供了录制工具和背景信息。
 
-## 项目状态
+<span id="项目状态" />
+
+## 项目状态 [#status]
 
 支持的功能：用于拉取的仓库 API、故障转移、熔断、对冲请求、blob 断点续传、令牌和 Basic 认证、管理套接字、配置重载，以及支持还原的 dockerd 配置管理。
 
 暂不支持：推送、本地 blob 缓存、密钥链后端和指标导出。
 
-## 环境要求
+<span id="环境要求" />
 
-- 构建需要 Go 1.26 或更新版本。
+## 环境要求 [#requirements]
+
+- 构建需要 Go 1.26.8 或更新版本，也可使用 Go 工具链自动下载。
 - 支持本机 Linux Docker Engine 或 macOS/Windows Docker Desktop（Linux 容器模式）。对于 rootless dockerd，操作者需要确保其网络命名空间能够访问代理监听地址，详见[运维指南](/zh-CN/docs/operations#rootless-dockerd)。
 
-## 安全注意事项
+<span id="安全注意事项" />
+
+## 安全注意事项 [#security-notes]
 
 - 仓库 API 不提供认证，因此默认监听 `127.0.0.1`。将 `listen` 设为非回环地址会向网络暴露未经认证的镜像拉取接口。
-- 凭据不会直接写入配置文件：密码使用 `env:NAME` 或 `file:/path` 等引用。日志和 `%v` 输出中的敏感信息会被脱敏。
+- 密码值不会直接写入配置文件，而是使用 `env:NAME` 或 `file:/path` 等引用。日志和 `%v` 输出中的敏感信息会被脱敏。
 - 客户端的 `Authorization` 请求头不会被转发到上游。
-- 管理套接字通过文件权限保护：目录权限为 `0700`，套接字权限为 `0600`。
+- 管理套接字通过文件权限保护：私有实例的目录权限为 `0700`，套接字权限为 `0600`。以 root 运行的系统服务使用标准端点 `/run/oci-mirror-proxy/admin.sock` 或 `/var/run/oci-mirror-proxy/admin.sock` 时，允许所有本地用户访问管理 API，包括修改配置和重载（目录权限 `0711`，套接字权限 `0666`）。只有 root 能替换目录或套接字；管理 API 不通过 TCP 暴露。
 - 镜像配置以实际文件为准，不依赖安装状态。仅在有变更时备份并原子替换；`revert` 只移除目标代理条目，保留其他配置。
 
 自动配置、生效及撤销参见[自动配置 Docker](/zh-CN/docs/docker-integration)。

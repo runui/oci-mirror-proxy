@@ -1,0 +1,106 @@
+---
+title: Развёртывание в Docker
+description: Развёртывание с Docker Compose, настройка хоста и локальная сборка.
+---
+
+## Требования и образ [#requirements-and-image]
+
+Используйте локальный Docker Engine или Docker Desktop в macOS с плагином Compose. Предоставленный Compose-файл использует bridge-сеть и публикует только `127.0.0.1:24817`. Настройка, активация и восстановление описаны в разделе [автоматической интеграции с Docker](/ru/docs/docker-integration). Rootless-сеть может требовать дополнительной настройки; см. [rootless dockerd](/ru/docs/operations#rootless-dockerd).
+
+Образы доступны в контейнерном реестре Gitea проекта:
+
+```text
+git.zmide.com/bin/oci-mirror-proxy:latest
+git.zmide.com/bin/oci-mirror-proxy:v1.0.1
+git.zmide.com/bin/oci-mirror-proxy:dev
+```
+
+Поддерживаются `linux/amd64` и `linux/arm64`. `latest` следует стабильным тегам `v*`, теги версий включают также предварительные релизы, а `dev` следует `master`. В рабочей среде используйте конкретный тег версии или дайджест. Для частного пакета сначала выполните `docker login git.zmide.com`.
+
+Многоэтапный Dockerfile собирает статический исполняемый файл Go и использует среду `scratch` с системными CA-сертификатами, без оболочки, с UID/GID `65532:65532`.
+
+## Запуск с Compose [#start-with-compose]
+
+Из корня репозитория:
+
+```sh
+mkdir -p config
+cp examples/config.docker.yaml config/config.yaml
+# Контейнер без root должен иметь возможность атомарно заменять файл конфигурации.
+sudo chown -R 65532:65532 config  # Только Linux; в macOS оставьте владельцем своего пользователя
+sudo chmod 700 config
+sudo chmod 600 config/config.yaml
+docker compose pull
+docker compose up -d --no-build
+docker compose ps
+docker compose logs -f
+```
+
+Для выбора другого образа добавьте в `.env` (либо экспортируйте переменную):
+
+```dotenv
+OCI_MIRROR_PROXY_IMAGE=git.zmide.com/bin/oci-mirror-proxy:v1.0.1
+```
+
+Либо соберите локально, не скачивая опубликованный образ приложения:
+
+```sh
+OCI_MIRROR_PROXY_IMAGE=oci-mirror-proxy:local docker compose build
+OCI_MIRROR_PROXY_IMAGE=oci-mirror-proxy:local docker compose up -d --no-build
+```
+
+Начальная конфигурация намеренно не содержит зеркал. Добавьте реальное зеркало перед использованием прокси; при пустом списке dockerd обращается к официальному реестру:
+
+```sh
+docker compose exec oci-mirror-proxy oci-mirror-proxy upstream add \
+  --id mirror-a --url https://mirror-a.example.com
+docker compose exec oci-mirror-proxy oci-mirror-proxy status
+curl -fsS http://127.0.0.1:24817/v2/
+```
+
+Подключайте **весь каталог конфигурации**, а не только `config.yaml`: управление источниками сохраняет файлы атомарным переименованием и требует записи в каталог. Изменения сохраняются при пересоздании контейнера. После ручного редактирования через `sudoedit config/config.yaml` выполните:
+
+```sh
+docker compose exec oci-mirror-proxy oci-mirror-proxy reload
+```
+
+Проверка работоспособности обращается к локальному сокету управления. Она проверяет отклик процесса, но не доступность источников и не настройки dockerd хоста. Сокет расположен в частной tmpfs и не предоставляется хосту. Журналы выводятся в stderr; SIGTERM выполняет корректное завершение. Привилегированный режим, подключение сокета Docker или конфигурации Docker хоста не требуются.
+
+## Настройка dockerd хоста [#configure-the-hosts-dockerd]
+
+Запуск контейнера **не настраивает** Docker на его использование. Установите CLI на хост по [инструкции установки](/ru/docs/installation). Экспортируйте сведения работающей службы без секретов из контейнера, затем передайте этот снимок CLI хоста для просмотра и применения настроек:
+
+```sh
+docker compose exec -T oci-mirror-proxy oci-mirror-proxy server info --json > server-info.json
+oci-mirror-proxy dockerd plan --server-info "$PWD/server-info.json"
+oci-mirror-proxy dockerd apply --server-info "$PWD/server-info.json"
+oci-mirror-proxy doctor --server-info "$PWD/server-info.json"
+docker pull hello-world
+```
+
+В Linux при необходимости добавьте `sudo` перед командами настройки. В macOS запускайте их от обычного пользователя и добавьте `--restart` к `dockerd apply`, когда будете готовы прервать работу Docker и активировать изменение.
+
+Для этих команд CLI хоста не нужны частный сокет управления или файлы конфигурации контейнера. После изменения объявленного адреса или маршрутов реестров экспортируйте снимок заново. Параметр `--config` для клиентских команд устарел и игнорируется: он не выбирает конфигурацию контейнера. Не запускайте второй прокси на хосте; при использовании установочного скрипта не указывайте `--service`. Ручная настройка и отмена описаны в разделе [эксплуатации](/ru/docs/operations#setting-up-dockerd).
+
+Контейнер слушает `0.0.0.0`, но опубликованный порт ограничен loopback хоста, поскольку API реестра не использует аутентификацию. В `advertise` оставьте адрес, доступный dockerd. Не публикуйте порт на всех интерфейсах хоста. Другие контейнеры в общей сети всё ещё могут обращаться к реестру.
+
+Для зеркал с аутентификацией явно передайте переменные окружения, на которые ссылается конфигурация, через Compose `environment` (запись в `.env` сама по себе не передаёт их в контейнер), либо подключите Compose secrets и используйте `file:/run/secrets/...`. Подключайте собственные CA-файлы только для чтения и задавайте `tls.ca_file` их путём внутри контейнера. Файлы должны быть доступны UID 65532 для чтения. Никогда не включайте секреты в образ или контекст сборки.
+
+## Обновление и остановка [#update-and-stop]
+
+```sh
+docker compose pull
+docker compose up -d --no-build
+docker compose down
+```
+
+`down` сохраняет `config/`. Перед окончательным удалением прокси выполните на хосте `oci-mirror-proxy dockerd revert --server-info "$PWD/server-info.json"` и активируйте изменение до остановки контейнера. В Linux при необходимости используйте sudo; в macOS запускайте без sudo и добавьте `--restart` для активации восстановленных настроек. Перезапуск прерывает работающие контейнеры. Отмена удаляет записи этого прокси из текущих настроек Docker, а не восстанавливает исторический снимок.
+
+## Локальная сборка [#local-builds]
+
+Запуск тестов и сборка локального образа:
+
+```sh
+docker build --target test .
+docker build -t oci-mirror-proxy:local --build-arg VERSION=dev .
+```

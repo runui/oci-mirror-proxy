@@ -1,84 +1,24 @@
 import { Radio, RotateCcw, ShieldCheck } from 'lucide-react';
+import { docsUrl, homeUrl } from './i18n';
+import { locales } from './locales';
+import { messages } from './messages';
 
-export const homeContent = {
-  en: {
-    title: 'Your mirrors.',
-    titleAccent: 'One reliable Docker pull.',
-    description: 'Put your registry mirrors behind one local proxy. Automatically switch away from failures and resume interrupted layers. Copy, run, and start pulling.',
-    install: 'install the latest release',
-    platformLabel: 'Installation platform',
-    verified: 'SHA256 checked · Your configuration stays yours',
-    installOptions: 'Install options & uninstall',
-    installNotes: {
-      linux: 'Paste into your terminal. Installs and starts a systemd/OpenRC service, then configures local Docker. Requests sudo for system changes; never restarts Docker.',
-      macos: 'Run as your Docker Desktop user. Installs a launchd system service and configures Docker Desktop. Requests sudo for system changes; follow any pending-restart instructions.',
-      windows: 'Run in PowerShell. Downloads the script, then installs a Windows service and configures Docker Desktop. Approve the administrator prompt; Docker is not restarted.',
-      freebsd: 'Installs the binary to /usr/local/bin without a service. Requires root or sudo if the directory is not writable. Start the proxy and configure Docker on its host using the installation guide.',
-    },
-    nextLabel: 'THEN / TRY A PULL',
-    nextTitle: 'Your next command is a Docker command.',
-    nextText: 'Follow the installer output to finish activation. Once Docker is connected, keep using the commands you already know.',
-    nextNote: 'Need a container deployment or a manual setup?',
-    nextLink: 'See other ways to run',
-    mirrors: 'your mirrors',
-    featuresLabel: 'Features',
-    features: [
-      { icon: Radio, title: 'Upstreams, on your terms.', text: 'Add, remove, and disable mirrors without restarting dockerd.', slug: 'operations' },
-      { icon: ShieldCheck, title: 'Isolate failures. Keep pulling.', text: 'Circuit breakers take failing mirrors out of rotation until a probe succeeds.', slug: 'architecture' },
-      { icon: RotateCcw, title: 'Resume. Don’t restart.', text: 'Continue an interrupted layer from the same byte offset on another mirror.', slug: 'configuration' },
-    ],
-    previewLabel: 'IN ACTION / A REAL PULL',
-    previewTitle: 'Less waiting. More progress.',
-    previewText: '508.0 s through the proxy, compared with 740.3 s directly from the mirror in this preview. Results depend on your network and mirrors.',
-    previewLink: 'See the comparison & recordings',
-    previewMetric: 'as fast in this preview',
-    previewUrl: '/docs#preview',
-    previewNote: 'Time-compressed GIFs · Select an image to enlarge · Close with × or Esc',
-    recordings: [
-      { title: 'Direct mirror · 740.3 s', alt: 'Docker pull directly from the mirror', file: 'direct-mirror' },
-      { title: 'Through oci-mirror-proxy · 508.0 s', alt: 'Docker pull through oci-mirror-proxy', file: 'oci-mirror-proxy' },
-    ],
-    footer: 'Footer',
-    llmsUrl: '/llms.txt',
-  },
-  'zh-CN': {
-    title: '多个镜像源，',
-    titleAccent: '一个可靠的拉取入口',
-    description: '把镜像源交给本地代理：故障自动切换，镜像层断点续传。复制命令，在终端运行，继续使用熟悉的 Docker',
-    install: '安装最新版本',
-    platformLabel: '安装平台',
-    verified: '校验 SHA256 · 保留已有配置',
-    installOptions: '安装选项与卸载',
-    installNotes: {
-      linux: '粘贴到终端运行。安装并启动 systemd/OpenRC 服务，自动配置本机 Docker。系统更改会请求 sudo，不会自动重启 Docker',
-      macos: '以 Docker Desktop 登录用户运行。安装 launchd 系统服务并配置 Docker Desktop。系统更改会请求 sudo，如提示待重启，请按安装器说明操作',
-      windows: '在 PowerShell 中运行。先下载脚本，再安装 Windows 服务并配置 Docker Desktop。请确认管理员授权提示；不会自动重启 Docker',
-      freebsd: '仅安装程序至 /usr/local/bin，不注册服务。目录不可写时需要 root 或 sudo。请按安装指南启动代理，并在 Docker 所在主机配置连接',
-    },
-    nextLabel: '下一步 / 拉取镜像',
-    nextTitle: '下一条命令，还是你熟悉的 Docker',
-    nextText: '按安装器输出完成激活。Docker 连接代理后，继续使用原来的命令即可',
-    nextNote: '需要容器部署或手动配置？',
-    nextLink: '查看其他运行方式',
-    mirrors: '镜像源',
-    featuresLabel: '功能',
-    features: [
-      { icon: Radio, title: '镜像源，随时管理', text: '添加、移除、禁用镜像源，无需重启 dockerd', slug: 'operations' },
-      { icon: ShieldCheck, title: '故障隔离，而非扩散', text: '熔断器隔离故障镜像源，探测成功后自动恢复', slug: 'architecture' },
-      { icon: RotateCcw, title: '从中断处，继续下载', text: '中断的镜像层可切换到另一个镜像源，继续传输', slug: 'configuration' },
-    ],
-    previewLabel: '预览 / 一次真实拉取',
-    previewTitle: '更少等待，持续前进',
-    previewText: '这次预览中，通过代理耗时 508.0 秒，直接使用镜像站耗时 740.3 秒。结果取决于网络环境和镜像源',
-    previewLink: '查看对比与原始录制',
-    previewMetric: '本次预览的速度比',
-    previewUrl: '/zh-CN/docs#preview',
-    previewNote: 'GIF 为加速预览 · 点击图片放大 · 按 × 或 Esc 关闭',
-    recordings: [
-      { title: '直连镜像站 · 740.3 秒', alt: '直接通过镜像站拉取 Docker 镜像', file: 'direct-mirror' },
-      { title: '通过 oci-mirror-proxy · 508.0 秒', alt: '通过 oci-mirror-proxy 拉取 Docker 镜像', file: 'oci-mirror-proxy' },
-    ],
-    footer: '页脚',
-    llmsUrl: '/zh-CN/llms.txt',
-  },
-};
+const features = [
+	{ icon: Radio, slug: 'operations' },
+	{ icon: ShieldCheck, slug: 'architecture' },
+	{ icon: RotateCcw, slug: 'configuration' },
+];
+const recordings = ['direct-mirror', 'oci-mirror-proxy'];
+
+function content(locale: (typeof locales)[number]) {
+	const text = messages(locale, 'home');
+	return {
+		...text,
+		features: text.features.map((feature, index) => ({ ...feature, ...features[index] })),
+		recordings: text.recordings.map((recording, index) => ({ ...recording, file: recordings[index] })),
+		previewUrl: `${docsUrl(locale)}#preview`,
+		llmsUrl: `${homeUrl(locale)}llms.txt`,
+	};
+}
+
+export const homeContent = Object.fromEntries(locales.map((locale) => [locale, content(locale)])) as Record<(typeof locales)[number], ReturnType<typeof content>>;

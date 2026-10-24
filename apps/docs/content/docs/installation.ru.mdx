@@ -1,0 +1,158 @@
+---
+title: Установка
+description: Установка, обновление и удаление в Linux, macOS, FreeBSD и Windows.
+---
+
+Установите последний релиз без клонирования репозитория. Сайт документации предоставляет установщик; исполняемые файлы релизов и архивы исходного кода загружаются из встроенного в установщик источника:
+
+```sh
+curl -fsSL https://ocimp.zmide.com/install.sh | sh
+oci-mirror-proxy version
+```
+
+Обновление существующей установки:
+
+```sh
+curl -fsSL https://ocimp.zmide.com/install.sh | sh -s -- update
+```
+
+В Linux запустите установщик с правами root. Он включает запуск прокси при загрузке системы и автоматически подключает локальный Docker; отдельная настройка Docker не требуется:
+
+```sh
+curl -fsSL https://ocimp.zmide.com/install.sh | sudo sh -s -- --service
+# Обновить системную установку и перезапустить службу:
+curl -fsSL https://ocimp.zmide.com/install.sh | sudo sh -s -- update --service
+```
+
+Скрипт скачивает подходящий исполняемый файл для Linux, macOS или FreeBSD и проверяет его контрольную сумму SHA256. Если готового файла нет или указан `--build`, он собирает исходный код релиза с помощью Go 1.26.8 или новее (либо автоматической загрузки инструментария Go). Для выбора релиза используйте `--version v1.0.1`.
+
+Для загрузки через зеркало задайте `DOWNLOAD_BASE_URL` равным корневому URL репозитория на зеркале (с той же структурой `/releases` и `/archive`). При передаче скрипта через конвейер переменную нужно передать `sh`, а не только `curl`:
+
+```sh
+curl -fsSL https://ocimp.zmide.com/install.sh | DOWNLOAD_BASE_URL=https://mirror.example.com/runui/oci-mirror-proxy sh
+```
+
+В Linux, macOS и FreeBSD путь по умолчанию — `/usr/local/bin/oci-mirror-proxy`. Параметр `--prefix` не нужен. Если каталог недоступен для записи, установщик запрашивает sudo; без sudo запустите его от root или выберите доступный каталог. Для установки только для текущего пользователя укажите `--prefix "$HOME/.local"` и добавьте `$HOME/.local/bin` в PATH. Существующая конфигурация сохраняется; без `--service` служба не устанавливается и не перезапускается. После обновления без `--service` перезапустите работающий прокси вручную.
+
+## Homebrew
+
+Установите готовый релиз в macOS (Apple Silicon или Intel) либо Linux (ARM64 или x86-64). Репозиторий проекта также служит Homebrew tap, поэтому при первом `brew tap` требуется явный URL репозитория:
+
+```sh
+brew tap runui/oci-mirror-proxy https://github.com/runui/oci-mirror-proxy.git
+brew install runui/oci-mirror-proxy/oci-mirror-proxy
+oci-mirror-proxy version
+```
+
+Homebrew проверяет SHA256 архива релиза. Go не требуется. Используйте Homebrew без sudo; не обновляйте и не удаляйте управляемый им файл через shell-установщик. Если системная служба уже установлена скриптом, остановите её перед запуском службы Homebrew: обе используют один порт по умолчанию.
+
+Перед первым запуском создайте пользовательскую конфигурацию. Если она уже есть, пропустите `init`: без `--force` команда отказывается перезаписывать существующий файл.
+
+```sh
+oci-mirror-proxy init
+brew services start runui/oci-mirror-proxy/oci-mirror-proxy
+oci-mirror-proxy status
+oci-mirror-proxy remote update
+```
+
+Служба работает от текущего пользователя с обычной пользовательской конфигурацией и сокетом управления. В macOS она запускается при входе в систему; в Linux используется пользовательская служба systemd. Без службы запускайте `oci-mirror-proxy serve` на переднем плане. Журналы записываются в `$(brew --prefix)/var/log/oci-mirror-proxy.log`. Команда `remote update` добавляет каталог зеркал по умолчанию; при последующих обновлениях используйте `remote update --all`, чтобы обновить все настроенные каталоги с сохранением выбора регионов.
+
+Установка или запуск службы Homebrew не меняет настройки Docker. После запуска службы выполните [автоматическую интеграцию с Docker](/ru/docs/docker-integration). В macOS запускайте следующие команды от пользователя, вошедшего в Docker Desktop, без sudo:
+
+```sh
+oci-mirror-proxy dockerd plan
+oci-mirror-proxy dockerd apply
+oci-mirror-proxy doctor
+```
+
+Если требуется перезапуск Docker, выполните его в удобное время. Явный параметр `dockerd apply --restart` перезапускает Docker Desktop и прерывает работающие контейнеры. Подробнее — в разделе [установки в macOS](/ru/docs/macos-installation#docker-desktop).
+
+Обновление и перезапуск существующей службы Homebrew:
+
+```sh
+brew update
+brew upgrade runui/oci-mirror-proxy/oci-mirror-proxy
+brew services restart runui/oci-mirror-proxy/oci-mirror-proxy
+```
+
+Если Docker настроен на использование прокси, отмените интеграцию **пока служба ещё работает**, следуя [инструкциям восстановления для своей платформы](/ru/docs/docker-integration#recovery). До остановки прокси активируйте восстановленные настройки Docker. В macOS:
+
+```sh
+oci-mirror-proxy dockerd revert --restart
+brew services stop runui/oci-mirror-proxy/oci-mirror-proxy
+brew uninstall runui/oci-mirror-proxy/oci-mirror-proxy
+brew untap runui/oci-mirror-proxy
+```
+
+`--restart` прерывает работающие контейнеры. Если Docker не подключался к прокси, пропустите отмену интеграции. Удаление через Homebrew сохраняет пользовательскую конфигурацию, кеши и журналы и не отменяет настройки Docker автоматически.
+
+## Платформы и установка в Windows [#platforms-and-windows-installation]
+
+Готовые исполняемые файлы доступны для следующих платформ:
+
+| Система | Архитектуры                  | Архив     |
+| ------- | ---------------------------- | --------- |
+| Linux   | amd64, arm64, armv7, riscv64 | `.tar.gz` |
+| macOS   | amd64, arm64                 | `.tar.gz` |
+| FreeBSD | amd64, arm64                 | `.tar.gz` |
+| Windows | amd64, arm64                 | `.zip`    |
+
+В Windows скачайте и проверьте установщик PowerShell, затем запустите его в PowerShell. При запросе подтвердите повышение прав до администратора Windows:
+
+```powershell
+Invoke-WebRequest https://ocimp.zmide.com/install.ps1 -OutFile install.ps1
+.\install.ps1
+# Обновить установку и перезапустить службу:
+.\install.ps1 update
+```
+
+Установщик запускает прокси как службу Windows, включает автозапуск при загрузке системы, автоматически подключает Docker Desktop и добавляет программу в PATH. Отдельная настройка Docker не требуется. Откройте новый терминал, чтобы запускать `oci-mirror-proxy` напрямую. Обновления сохраняют существующую конфигурацию. Требуется .NET Framework 4.x. Каталог исполняемых файлов по умолчанию — `%ProgramFiles%\oci-mirror-proxy\bin`; `-Prefix` нужен только для нестандартного каталога установки.
+
+Управление службой и устранение неполадок описаны в разделе [эксплуатации](/ru/docs/operations). Необязательные параметры установки: `Get-Help .\install.ps1 -Full`.
+
+Параметр `--service` поддерживает системные службы systemd/OpenRC в Linux и launchd в macOS. Установка через sudo без `--service` создаёт пользовательскую конфигурацию от имени проверенного пользователя, вызвавшего sudo. См. [установку и права доступа в macOS](/ru/docs/macos-installation) для управления службой и восстановления пользовательских файлов, оставшихся во владении root после старых установок.
+
+## Обновление и удаление [#update-and-uninstall]
+
+```sh
+sh install.sh update
+sudo sh install.sh update --service
+sh install.sh uninstall
+```
+
+```powershell
+.\install.ps1 update
+.\install.ps1 uninstall
+```
+
+В Unix обновление находит существующий исполняемый файл через PATH; удаление также обнаруживает управляемые службы. Если использовался нестандартный каталог, который не удаётся определить, укажите исходный `--prefix` (Windows: `-Prefix`).
+
+Обновления сохраняют конфигурацию. Если автоматическая настройка Docker не завершилась, установщик оставляет прокси установленным и выводит инструкции восстановления. Docker не перезапускается автоматически; при необходимости следуйте выводу установщика.
+
+Поддерживаются Windows PowerShell 5.1 и PowerShell 7. Предупреждения о совместимости реестров сами по себе не означают сбой установки: Docker Desktop использует зеркала только для Docker Hub, поэтому другие реестры могут быть пропущены. Ожидающий перезапуск означает, что настройки сохранены, но ещё не активны. Установщик не перезапускает Docker и не прерывает контейнеры автоматически.
+
+При удалении службы сначала убираются записи этого прокси из текущих настроек Docker вызывающего пользователя; остальные зеркала и настройки сохраняются. Если очистка не удалась, удаление прерывается. Чтобы явно оставить Docker без изменений, используйте `-SkipDocker` (Windows) или `--skip-docker` (Unix). Конфигурация прокси, кеши и журналы сохраняются. Удаление только исполняемого файла не меняет Docker. Ручное восстановление описано в разделе [эксплуатации](/ru/docs/operations).
+
+Справка по параметрам: `sh install.sh --help` или `Get-Help .\install.ps1 -Full`.
+
+## Развёртывание в Docker [#docker-deployment]
+
+Пользователи Docker Engine и Docker Desktop в macOS могут использовать [docker-compose.yaml](https://github.com/runui/oci-mirror-proxy/blob/master/docker-compose.yaml). Подготовьте доступный для записи каталог конфигурации и выполните `docker compose up -d --no-build`. Образ поддерживает amd64/arm64 и bridge-сеть с публикацией порта только на loopback хоста, без подключения сокета Docker. См. [развёртывание в Docker](/ru/docs/docker) для настройки, локальной сборки и конфигурации dockerd хоста.
+
+## Сборка из исходного кода [#build-from-source]
+
+```sh
+make build                                   # создаёт dist/oci-mirror-proxy
+
+dist/oci-mirror-proxy init                   # создаёт пользовательскую конфигурацию
+dist/oci-mirror-proxy serve &                # запускает прокси в фоне
+
+dist/oci-mirror-proxy upstream add \
+  --id mirror-a --url https://mirror-a.example.com
+
+sudo dist/oci-mirror-proxy dockerd plan      # показывает изменения, ничего не записывает
+sudo dist/oci-mirror-proxy dockerd apply     # записывает конфигурацию dockerd
+dist/oci-mirror-proxy doctor                 # проверяет прокси, dockerd и конфигурацию
+```
+
+Полный пример с пояснениями всех параметров: [examples/config.example.yaml](https://github.com/runui/oci-mirror-proxy/blob/master/examples/config.example.yaml).
