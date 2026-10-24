@@ -79,7 +79,7 @@ The static export publishes these URLs directly, without a backend:
 
 The rest of `subscriptions/`, including its README files and any subdirectories, is published at the same relative paths. Edit the original repository files, not their generated copies. A new site build is required to publish changes.
 
-The site hosts scripts and catalogs, not release binaries or source archives. The installation commands use the installer's built-in download source for release downloads and checksum verification. The documentation domain has no `/releases` or `/archive` endpoints. The CLI's built-in subscription URL is unchanged; use `--url https://ocimp.zmide.com/subscriptions/mirrors.json` to select the published catalog.
+The site hosts scripts and catalogs, not release binaries or source archives. The installation commands use the installer's built-in download source for release downloads and checksum verification. The documentation domain has no `/releases` or `/archive` endpoints. The published catalog is the CLI's default subscription.
 
 ## Other static hosts
 

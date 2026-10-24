@@ -21,7 +21,7 @@ oci-mirror-proxy remote remove --url https://example.com/mirrors.json
 https://ocimp.zmide.com/subscriptions/mirrors.json
 ```
 
-不传 `--url`、`--all` 时仍使用 CLI 内置的默认订阅地址，不会自动改为文档站地址。
+不传 `--url`、`--all` 时使用 CLI 内置的默认订阅。
 
 省略 `--regions` 时仅选择 `global` 节点；使用 `--regions cn,eu` 选择多个区域，或使用 `--regions ''` 选择全部站点。多个区域按精确标签取并集，不隐含包含 `global`。`global` 表示广泛可用，不保证所有地区均能访问。`--all` 保留各源已保存的区域选择；旧记录未保存区域时使用 `global`，与 `--url`、`--regions` 互斥。
 

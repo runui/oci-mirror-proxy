@@ -17,7 +17,7 @@ import (
 	"github.com/runui/oci-mirror-proxy/internal/config"
 )
 
-const defaultRemoteURL = "https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/subscriptions/mirrors.json"
+const defaultRemoteURL = "https://ocimp.zmide.com/subscriptions/mirrors.json"
 const maxCatalogSize = 4 << 20
 
 func parseRemoteFlags(fs *flag.FlagSet, args []string) error {
