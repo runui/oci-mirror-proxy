@@ -5,7 +5,7 @@ description: Команды, интеграция с Docker, управлени�
 
 ## Команды [#commands]
 
-Просмотрите удалённый каталог без подписки командой `remote show [--url U] [--region cn]`. Управление каталогами зеркал: `remote list`, `remote update [--url U] --region cn`, `remote update --all` и `remote remove --url U`. Обновление и удаление поддерживают `--dry-run` и резервирование предыдущего результата; см. [удалённые каталоги](/ru/docs/remotes). Источники можно добавлять без `--id`; enable/disable/remove принимают `--url` вместо устаревшей метки. Перечитывание не прерывает текущие HTTP-передачи.
+Просмотрите удалённый каталог без подписки командой `remote show [--url U] [--regions cn]`. Управление каталогами зеркал: `remote list`, `remote update [--url U] --regions cn`, `remote update --all` и `remote remove --url U`. Обновление и удаление поддерживают `--dry-run` и резервирование предыдущего результата; см. [удалённые каталоги](/ru/docs/remotes). Источники можно добавлять без `--id`; enable/disable/remove принимают `--url` вместо устаревшей метки. Перечитывание не прерывает текущие HTTP-передачи.
 
 | Команда | Назначение |
 | --- | --- |
@@ -53,7 +53,7 @@ $proxy = "$env:ProgramFiles\oci-mirror-proxy\bin\oci-mirror-proxy.exe"
 $config = "$env:ProgramData\oci-mirror-proxy\config.yaml"
 Get-Service oci-mirror-proxy
 & $proxy status --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
-& $proxy remote update --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --region cn
+& $proxy remote update --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --regions cn
 # После редактирования config.yaml:
 & $proxy reload --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
 # После изменения listen:

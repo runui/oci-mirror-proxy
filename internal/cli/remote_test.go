@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,38 @@ func catalogJSON(endpoint string) string {
 	return `{"version":1,"regions":{"cn":"China","apac":"Asia Pacific"},"mirrors":[{"name":"Example","regions":["cn","apac"],"endpoints":[{"registry":"docker.io","url":"` + endpoint + `"}]}]}`
 }
 
+func TestRemoteRegionFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--region", "cn,eu"},
+		{"--region=cn,eu"},
+		{"--regions", "cn,eu"},
+		{"--regions=cn,eu"},
+		{"--region", "cn", "--regions", "cn,eu"},
+	} {
+		fs := flag.NewFlagSet("remote", flag.ContinueOnError)
+		regions := fs.String("regions", "global", "comma-separated regions")
+		if err := parseRemoteFlags(fs, args); err != nil || *regions != "cn,eu" {
+			t.Fatalf("%v: regions=%q, error=%v", args, *regions, err)
+		}
+	}
+	fs := flag.NewFlagSet("remote", flag.ContinueOnError)
+	regions := fs.String("regions", "global", "comma-separated regions")
+	url := fs.String("url", "", "catalog URL")
+	if err := parseRemoteFlags(fs, []string{"--url", "--region"}); err != nil || *url != "--region" || *regions != "global" {
+		t.Fatalf("changed flag value: url=%q, regions=%q, error=%v", *url, *regions, err)
+	}
+	for _, action := range []string{"update", "show"} {
+		_, _, help := run(t, "remote", action, "--help")
+		if !strings.Contains(help, "-regions ") || strings.Contains(help, "-region ") {
+			t.Fatalf("unexpected help: %s", help)
+		}
+		_, _, errOut := run(t, "remote", action, "--region")
+		if !strings.Contains(errOut, "-regions") || strings.Contains(errOut, "-region\n") {
+			t.Fatalf("unexpected error: %s", errOut)
+		}
+	}
+}
+
 func TestRemoteLifecycleBackupDedupAndDryRun(t *testing.T) {
 	main := writeConfig(t, config.Default())
 	socket := startTestAPI(t, main)
@@ -35,10 +68,10 @@ func TestRemoteLifecycleBackupDedupAndDryRun(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { mu.Lock(); defer mu.Unlock(); io.WriteString(w, body) }))
 	defer server.Close()
 	invoke := func(extra ...string) (int, string, string) {
-		args := []string{"remote", "update", "--config", main, "--admin-socket", socket, "--url", server.URL, "--no-reload"}
+		args := []string{"remote", "update", "--config", main, "--admin-socket", socket, "--url", server.URL, "--regions", "cn,apac", "--no-reload"}
 		return run(t, append(args, extra...)...)
 	}
-	if code, _, e := invoke("--region", "cn,apac", "--dry-run"); code != 0 {
+	if code, _, e := invoke("--regions", "cn,apac", "--dry-run"); code != 0 {
 		t.Fatal(e)
 	}
 	if _, err := os.Stat(config.DropInDir(main)); !os.IsNotExist(err) {
@@ -47,7 +80,7 @@ func TestRemoteLifecycleBackupDedupAndDryRun(t *testing.T) {
 	if _, err := os.Stat(main + ".lock"); !os.IsNotExist(err) {
 		t.Fatal("dry-run created lock")
 	}
-	if code, _, e := invoke("--region", "cn,apac"); code != 0 {
+	if code, _, e := invoke("--regions", "cn,apac"); code != 0 {
 		t.Fatal(e)
 	}
 	path, _ := remotePath(main, server.URL)
@@ -172,11 +205,11 @@ func TestRemoteAllRegions(t *testing.T) {
 		count   int
 		regions string
 	}{
-		{name: "first update without region", count: 3, regions: "cn,eu,global"},
-		{name: "explicit region filters sites", flags: []string{"--region", "cn"}, count: 1, regions: "cn"},
-		{name: "omitted region clears previous filter", count: 3, regions: "cn,eu,global"},
-		{name: "multiple regions", flags: []string{"--region", "cn,eu"}, count: 2, regions: "cn,eu"},
-		{name: "explicit empty region selects all", flags: []string{"--region", ""}, count: 3, regions: "cn,eu,global"},
+		{name: "first update defaults to global", count: 1, regions: "global"},
+		{name: "explicit region filters sites", flags: []string{"--regions", "cn"}, count: 1, regions: "cn"},
+		{name: "omitted regions resets to global", count: 1, regions: "global"},
+		{name: "multiple regions", flags: []string{"--regions", "cn,eu"}, count: 2, regions: "cn,eu"},
+		{name: "explicit empty region selects all", flags: []string{"--regions", ""}, count: 3, regions: "cn,eu,global"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if code, _, errOut := run(t, append(args, tc.flags...)...); code != 0 {
@@ -184,6 +217,16 @@ func TestRemoteAllRegions(t *testing.T) {
 			}
 			check(tc.count, tc.regions)
 		})
+	}
+	allArgs := []string{"remote", "update", "--admin-socket", socket, "--all", "--no-reload"}
+	if code, _, errOut := run(t, allArgs...); code != 0 {
+		t.Fatal(errOut)
+	}
+	check(3, "cn,eu,global")
+	for _, value := range []string{"cn,eu", ""} {
+		if code, _, _ := run(t, append(allArgs, "--regions", value)...); code == 0 {
+			t.Fatal("--all accepted explicit --regions")
+		}
 	}
 }
 
@@ -393,9 +436,9 @@ func TestRemoteReloadAndURLUpstreamCommands(t *testing.T) {
 	}))
 	defer catalog.Close()
 	for _, args := range [][]string{
-		{"remote", "update", "--config", main, "--admin-socket", socket, "--url", catalog.URL, "--region", "cn", "--admin-socket", sock},
+		{"remote", "update", "--config", main, "--admin-socket", socket, "--url", catalog.URL, "--regions", "cn", "--admin-socket", sock},
 		{"upstream", "disable", "--config", main, "--admin-socket", socket, "--url", "https://mirror.example/hub", "--admin-socket", sock},
-		{"remote", "update", "--config", main, "--admin-socket", socket, "--url", catalog.URL, "--admin-socket", sock},
+		{"remote", "update", "--config", main, "--admin-socket", socket, "--url", catalog.URL, "--regions", "cn", "--admin-socket", sock},
 	} {
 		if code, _, e := run(t, args...); code != 0 {
 			t.Fatalf("%v: %s", args, e)
@@ -459,7 +502,7 @@ func TestRemoteReloadFailureReportsCommittedFileAndRetryReloads(t *testing.T) {
 	defer server.Close()
 	catalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, catalogJSON("https://mirror.example")) }))
 	defer catalog.Close()
-	args := []string{"remote", "update", "--config", main, "--admin-socket", socket, "--url", catalog.URL, "--region", "cn", "--admin-socket", sock}
+	args := []string{"remote", "update", "--config", main, "--admin-socket", socket, "--url", catalog.URL, "--regions", "cn", "--admin-socket", sock}
 	if code, _, e := run(t, args...); code != 1 || !strings.Contains(e, "files saved") {
 		t.Fatalf("%d %s", code, e)
 	}

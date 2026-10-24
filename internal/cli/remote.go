@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,29 @@ import (
 
 const defaultRemoteURL = "https://git.zmide.com/bin/oci-mirror-proxy/raw/branch/master/subscriptions/mirrors.json"
 const maxCatalogSize = 4 << 20
+
+func parseRemoteFlags(fs *flag.FlagSet, args []string) error {
+	args = append([]string(nil), args...)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" || !strings.HasPrefix(arg, "-") || arg == "-" {
+			break
+		}
+		name, _, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+		if name == "region" && fs.Lookup("regions") != nil {
+			args[i] = strings.Replace(arg, "region", "regions", 1)
+			name = "regions"
+		}
+		f := fs.Lookup(name)
+		if f == nil || hasValue {
+			continue
+		}
+		if b, ok := f.Value.(interface{ IsBoolFlag() bool }); !ok || !b.IsBoolFlag() {
+			i++
+		}
+	}
+	return parseFlags(fs, args)
+}
 
 func fetchCatalog(ctx context.Context, raw string) (remoteCatalog, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -84,14 +108,20 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		noReload = fs.Bool("no-reload", false, "write files without notifying the proxy")
 	}
 	if action == "update" {
-		region = fs.String("region", "", "comma-separated regions (empty selects all sites)")
+		region = fs.String("regions", "global", "comma-separated regions (default global; empty selects all sites)")
 		all = fs.Bool("all", false, "update every configured remote")
 		allowEmpty = fs.Bool("allow-empty", false, "allow an empty selected mirror list")
 	}
-	if err := parseFlags(fs, args[1:]); err != nil {
+	if err := parseRemoteFlags(fs, args[1:]); err != nil {
 		return err
 	}
 	_ = configFlag
+	regionsSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "regions" {
+			regionsSet = true
+		}
+	})
 	client, err := adminClient(*socket, "")
 	if err != nil {
 		return err
@@ -128,8 +158,8 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	var urls []string
 	savedRegions := map[string][]string{}
 	if action == "update" && *all {
-		if *raw != "" || *region != "" {
-			return fmt.Errorf("%w: --all cannot be combined with --url or --region", errUsage)
+		if *raw != "" || regionsSet {
+			return fmt.Errorf("%w: --all cannot be combined with --url or --regions", errUsage)
 		}
 		files, err := scanRemoteClient(client)
 		if err != nil {
@@ -180,6 +210,9 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		selection := regions
 		if all != nil && *all {
 			selection = savedRegions[u]
+			if len(selection) == 0 {
+				selection = []string{"global"}
+			}
 		}
 		mutated, e := editRemoteClient(client, u, selection, catalog, action, *dry, allowEmpty != nil && *allowEmpty, stdout)
 		// Successful writes are reloaded together after processing all sources.

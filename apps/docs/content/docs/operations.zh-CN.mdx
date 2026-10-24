@@ -7,7 +7,7 @@ description: 命令、Docker 接入、服务管理与故障排查。
 
 ## 命令 [#commands]
 
-使用 `remote show [--url U] [--region cn]` 查看远端目录，无须先订阅。远端源使用 `remote list`、`remote update [--url U] --region cn`、 `remote update --all`、`remote remove --url U` 管理；支持 `--dry-run` 和上一次结果备份，详见[远端订阅](/zh-CN/docs/remotes)。`upstream add` 无需 `--id`，启用/禁用/删除可用 `--url` 代替旧标签。重载不打断正在传输的 HTTP 请求。
+使用 `remote show [--url U] [--regions cn]` 查看远端目录，无须先订阅。远端源使用 `remote list`、`remote update [--url U] --regions cn`、 `remote update --all`、`remote remove --url U` 管理；支持 `--dry-run` 和上一次结果备份，详见[远端订阅](/zh-CN/docs/remotes)。`upstream add` 无需 `--id`，启用/禁用/删除可用 `--url` 代替旧标签。重载不打断正在传输的 HTTP 请求。
 
 | 命令 | 用途 |
 | --- | --- |
@@ -61,7 +61,7 @@ $proxy = "$env:ProgramFiles\oci-mirror-proxy\bin\oci-mirror-proxy.exe"
 $config = "$env:ProgramData\oci-mirror-proxy\config.yaml"
 Get-Service oci-mirror-proxy
 & $proxy status --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
-& $proxy remote update --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --region cn
+& $proxy remote update --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --regions cn
 # 编辑 config.yaml 后：
 & $proxy reload --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
 # 修改 listen 后：

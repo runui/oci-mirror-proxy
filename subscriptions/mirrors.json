@@ -5,13 +5,19 @@
 		"apac": "亚太",
 		"eu": "欧洲",
 		"na": "北美",
+		"de": "德国",
+		"us": "美国",
+		"ru": "俄罗斯",
+		"ir": "伊朗",
+		"sg": "新加坡",
+		"jp": "日本",
 		"global": "全球"
 	},
 	"mirrors": [
 		{
 			"name": "DaoCloud Public Image Mirror",
 			"website": "https://github.com/DaoCloud/public-image-mirror",
-			"regions": ["cn", "apac", "eu", "na"],
+			"regions": ["global", "cn", "apac", "eu", "na"],
 			"endpoints": [
 				{ "registry": "docker.io", "url": "https://docker.m.daocloud.io" },
 				{ "registry": "ghcr.io", "url": "https://ghcr.m.daocloud.io" },
@@ -23,7 +29,7 @@
 		{
 			"name": "ZimaOS Image Mirror",
 			"website": "https://www.zimaos.com",
-			"regions": ["cn", "apac", "eu", "na"],
+			"regions": ["global", "cn", "apac", "eu", "na"],
 			"endpoints": [
 				{ "registry": "docker.io", "url": "https://storeproxy.zimaos.com" },
 				{ "registry": "gcr.io", "url": "https://gcr.zimaos.com" },
@@ -34,13 +40,97 @@
 		{
 			"name": "1ms Image Mirror",
 			"website": "https://1ms.run",
-			"regions": ["cn", "apac", "eu", "na"],
+			"regions": ["global", "cn", "apac", "eu", "na"],
 			"endpoints": [
 				{ "registry": "docker.io", "url": "https://docker.1ms.run" },
 				{ "registry": "gcr.io", "url": "https://gcr.1ms.run" },
 				{ "registry": "quay.io", "url": "https://quay.1ms.run" },
 				{ "registry": "ghcr.io", "url": "https://ghcr.1ms.run" }
 			]
+		},
+		{
+			"name": "DockerProxy",
+			"website": "https://dockerproxy.net",
+			"regions": ["global", "cn", "apac", "eu", "na"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://dockerproxy.net" }]
+		},
+		{
+			"name": "Beget Docker Hub Mirror",
+			"website": "https://beget.com/ru/kb/how-to/vps/kak-obojti-blokirovku-docker-hub",
+			"regions": ["global", "cn", "apac", "eu", "na"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://dockerhub1.beget.com" }]
+		},
+		{
+			"name": "GitVerse Docker Hub Mirror",
+			"website": "https://gitverse.ru/docs/artifactory/registry-mirrors/dh-mirror/",
+			"regions": ["global", "cn", "apac", "eu", "na"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://dh-mirror.gitverse.ru" }]
+		},
+		{
+			"name": "T1 Cloud Docker Hub Mirror",
+			"website": "https://t1-cloud.ru",
+			"regions": ["global", "cn", "apac", "eu", "na"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://mcr.t1.cloud" }]
+		},
+		{
+			"name": "ArvanCloud Docker Hub Mirror",
+			"website": "https://www.arvancloud.ir/fa/dev/docker",
+			"regions": ["global", "cn", "apac", "eu", "na"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://docker.arvancloud.ir" }]
+		},
+		{
+			"name": "kernel.ir Docker Hub Mirror",
+			"website": "https://docker.kernel.ir",
+			"regions": ["global", "cn", "apac", "eu", "na"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://docker.kernel.ir" }]
+		},
+		{
+			"name": "Mecan Docker Hub Mirror",
+			"website": "https://hub.mecan.ir",
+			"regions": ["global", "cn", "apac", "eu", "na"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://hub.mecan.ir" }]
+		},
+		{
+			"name": "docker.ir Docker Hub Mirror",
+			"website": "https://registry.docker.ir",
+			"regions": ["global", "cn", "apac", "eu", "na"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://registry.docker.ir" }]
+		},
+		{
+			"name": "Google Docker Hub Cache",
+			"website": "https://docs.cloud.google.com/artifact-registry/docs/pull-cached-dockerhub-images",
+			"regions": ["us", "de", "ru", "sg", "jp"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://mirror.gcr.io" }]
+		},
+		{
+			"name": "Timeweb Docker Hub Mirror",
+			"website": "https://dockerhub.timeweb.cloud",
+			"regions": ["us", "de", "ru", "ir", "sg", "jp"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://dockerhub.timeweb.cloud" }]
+		},
+		{
+			"name": "IranServer Docker Hub Mirror",
+			"website": "https://www.iranserver.com/docker/",
+			"regions": ["global", "cn", "us", "de", "ir", "sg", "jp"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://docker.iranserver.com" }]
+		},
+		{
+			"name": "MobinHost Docker Hub Mirror",
+			"website": "https://docker.mobinhost.com",
+			"regions": ["global", "cn", "us", "de", "ru", "ir", "sg"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://docker.mobinhost.com" }]
+		},
+		{
+			"name": "Abrha Docker Hub Mirror",
+			"website": "https://docker.abrha.net",
+			"regions": ["global", "cn", "us", "de", "ru", "ir", "sg", "jp"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://docker.abrha.net" }]
+		},
+		{
+			"name": "vvvv.ee Docker Hub Proxy",
+			"website": "https://proxy.vvvv.ee",
+			"regions": ["cn", "de", "ru", "sg", "jp"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://proxy.vvvv.ee" }]
 		},
 		{
 			"name": "1Panel Docker Hub Mirror",

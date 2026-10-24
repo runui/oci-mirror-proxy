@@ -36,7 +36,7 @@ func TestRemoteShow(t *testing.T) {
 		{"none", "eu", 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			code, out, stderr := run(t, "remote", "show", "--url", server.URL+"?token=private-secret", "--region", tc.region)
+			code, out, stderr := run(t, "remote", "show", "--url", server.URL+"?token=private-secret", "--regions", tc.region)
 			if code != 0 {
 				t.Fatalf("exit %d: %s", code, stderr)
 			}
@@ -88,7 +88,7 @@ func TestRemoteShowErrors(t *testing.T) {
 				io.WriteString(w, tc.body)
 			}))
 			defer server.Close()
-			code, out, stderr := run(t, "remote", "show", "--url", server.URL+"?token=private-secret", "--region", tc.region)
+			code, out, stderr := run(t, "remote", "show", "--url", server.URL+"?token=private-secret", "--regions", tc.region)
 			if code != tc.code || !strings.Contains(out+stderr, tc.want) || strings.Contains(out+stderr, "private-secret") {
 				t.Fatalf("exit %d, stdout %q, stderr %q", code, out, stderr)
 			}

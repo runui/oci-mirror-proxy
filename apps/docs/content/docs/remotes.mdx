@@ -8,9 +8,9 @@ to files in the running service's `config.d` configuration directory. Start the 
 
 ```sh
 # With the proxy service running:
-oci-mirror-proxy remote update --url https://ocimp.zmide.com/subscriptions/mirrors.json --region cn
+oci-mirror-proxy remote update --url https://ocimp.zmide.com/subscriptions/mirrors.json --regions cn
 oci-mirror-proxy remote list
-oci-mirror-proxy remote update --url https://example.com/mirrors.json --region cn,apac
+oci-mirror-proxy remote update --url https://example.com/mirrors.json --regions cn,apac
 oci-mirror-proxy remote update --all --dry-run
 oci-mirror-proxy remote update --all
 oci-mirror-proxy remote remove --url https://example.com/mirrors.json
@@ -27,10 +27,13 @@ Use `--url` to select a catalog; omitting both `--url` and `--all` selects the
 CLI's built-in default.
 The published URL is explicit; it does not change the default bundled with the CLI.
 
-Omitting `--region` selects all catalog regions; specifying it filters the selection. Regions are exact labels;
-multiple labels select their union. `global` is not included automatically.
+Omitting `--regions` selects only `global` mirrors. Use `--regions cn,eu` to
+select multiple regions, or `--regions ''` to select all sites. Regions are exact
+labels; multiple labels select their union. Explicit selections do not implicitly include `global`.
 `--all` updates configured sources with their respective saved selections and
-cannot be combined with `--url` or `--region`.
+uses `global` for older sources without saved regions. It cannot be combined with
+`--url` or `--regions`. The `global` label identifies broadly available mirrors,
+not guaranteed access from every location.
 
 List/update/remove accept `--admin-socket` to select the service.
 Update/remove accept `--dry-run` and `--no-reload`. A dry run previews changes without saving them.
@@ -45,7 +48,7 @@ catalog and inspect its mirror sites without subscribing or creating local files
 ```sh
 oci-mirror-proxy remote show
 oci-mirror-proxy remote show --url https://example.com/mirrors.json
-oci-mirror-proxy remote show --url https://example.com/mirrors.json --region cn,apac
+oci-mirror-proxy remote show --url https://example.com/mirrors.json --regions cn,apac
 ```
 
 Omitting `--url` uses the built-in default catalog. Each endpoint gets a row with
@@ -53,12 +56,12 @@ the site's name, complete region labels, registry, endpoint URL, and website
 (`-` when absent). Sites and endpoints retain catalog order; identical endpoints
 from different sites remain visible. Website query strings are redacted.
 
-Omitting `--region` or passing an empty value shows all sites. Multiple regions
+Omitting `--regions` or passing an empty value shows all sites. Multiple regions
 select their union; a matching site shows all its endpoints. Unknown region labels
 are errors and list the available labels. Empty results print `no matching mirrors`
 and exit successfully.
 
-`show` accepts only `--url`, `--region`, and help flags. It needs no local
+`show` accepts only `--url`, `--regions`, and help flags. It needs no local
 configuration or running proxy, writes no configuration, and never reloads the
 service. It displays catalog contents, not local enablement or endpoint health;
 mirror endpoints and websites are not contacted. Download and catalog validation

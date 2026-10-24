@@ -89,14 +89,17 @@ with your GitHub account and branch name:
 ```sh
 oci-mirror-proxy remote update \
   --url https://github.com/YOUR-USER/oci-mirror-proxy/raw/refs/heads/YOUR-BRANCH/subscriptions/mirrors.json \
-  --region cn --dry-run
+  --regions cn --dry-run
 
 oci-mirror-proxy remote update \
   --url https://github.com/YOUR-USER/oci-mirror-proxy/raw/refs/heads/YOUR-BRANCH/subscriptions/mirrors.json \
-  --region cn
+  --regions cn
 ```
 
-Choose a region present in your catalog. Each URL is a separate subscription:
+Choose regions present in your catalog, separated by commas (for example,
+`--regions cn,eu`). Omitting `--regions` selects only `global` mirrors;
+`--regions ''` selects all sites. The `global` label indicates broad availability,
+not guaranteed access from every location. Each URL is a separate subscription:
 adding your fork does not replace an existing source. If you want to use only
 your fork, run `remote list`, then remove the old source with
 `remote remove --url OLD-CATALOG-URL`. Keep your fork up to date with GitHub's

@@ -78,12 +78,14 @@ hook 不会自动修复或暂存文件。检查失败时，修正报告的错误
 ```sh
 oci-mirror-proxy remote update \
   --url https://github.com/YOUR-USER/oci-mirror-proxy/raw/refs/heads/YOUR-BRANCH/subscriptions/mirrors.json \
-  --region cn --dry-run
+  --regions cn --dry-run
 
 oci-mirror-proxy remote update \
   --url https://github.com/YOUR-USER/oci-mirror-proxy/raw/refs/heads/YOUR-BRANCH/subscriptions/mirrors.json \
-  --region cn
+  --regions cn
 ```
+
+`--regions cn,eu` 可选择多个区域；省略时仅选择 `global`，传入空字符串则选择全部站点。`global` 表示广泛可用，不保证所有地区均能访问。
 
 请选择目录中存在的区域。每个 URL 都是独立订阅，添加 Fork 不会替换已有源。
 如果只想使用自己的目录，可先执行 `remote list`，再用

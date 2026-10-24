@@ -16,8 +16,8 @@ import (
 func cmdRemoteShow(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("remote show", stderr)
 	raw := fs.String("url", defaultRemoteURL, "remote JSON URL (defaults to the repository catalog)")
-	region := fs.String("region", "", "comma-separated regions (empty shows all sites)")
-	if err := parseFlags(fs, args); err != nil {
+	region := fs.String("regions", "", "comma-separated regions (empty shows all sites)")
+	if err := parseRemoteFlags(fs, args); err != nil {
 		return err
 	}
 	u, err := remoteShowURL(*raw)

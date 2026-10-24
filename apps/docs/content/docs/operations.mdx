@@ -5,7 +5,7 @@ description: Commands, Docker integration, service management, and troubleshooti
 
 ## Commands
 
-Inspect a remote catalog without subscribing using `remote show [--url U] [--region cn]`. Remote mirror catalogs are managed by `remote list`, `remote update [--url U] --region cn`, `remote update --all`, and `remote remove --url U`. Updates/removal support `--dry-run` and previous-result backups; see [remote catalogs](/docs/remotes). Upstreams may be added without `--id`; enable/disable/remove accept `--url` instead of the legacy label. Reload does not interrupt in-flight HTTP transfers.
+Inspect a remote catalog without subscribing using `remote show [--url U] [--regions cn]`. Remote mirror catalogs are managed by `remote list`, `remote update [--url U] --regions cn`, `remote update --all`, and `remote remove --url U`. Updates/removal support `--dry-run` and previous-result backups; see [remote catalogs](/docs/remotes). Upstreams may be added without `--id`; enable/disable/remove accept `--url` instead of the legacy label. Reload does not interrupt in-flight HTTP transfers.
 
 | Command | Purpose |
 | --- | --- |
@@ -53,7 +53,7 @@ $proxy = "$env:ProgramFiles\oci-mirror-proxy\bin\oci-mirror-proxy.exe"
 $config = "$env:ProgramData\oci-mirror-proxy\config.yaml"
 Get-Service oci-mirror-proxy
 & $proxy status --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
-& $proxy remote update --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --region cn
+& $proxy remote update --admin-socket '\\.\pipe\oci-mirror-proxy-admin' --regions cn
 # After editing config.yaml:
 & $proxy reload --admin-socket '\\.\pipe\oci-mirror-proxy-admin'
 # After changing listen:
