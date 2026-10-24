@@ -47,6 +47,79 @@ For an optional user-only installation, pass `--prefix "$HOME/.local"` and add
 no service is installed or restarted. Restart a running proxy manually after
 updating without `--service`.
 
+## Homebrew
+
+Install the prebuilt release on macOS (Apple Silicon or Intel) or Linux (ARM64 or
+x86-64). The project repository also serves as its Homebrew tap, so the explicit
+repository URL is required on the first `brew tap`:
+
+```sh
+brew tap runui/oci-mirror-proxy https://github.com/runui/oci-mirror-proxy.git
+brew install runui/oci-mirror-proxy/oci-mirror-proxy
+oci-mirror-proxy version
+```
+
+Homebrew verifies the release archive's SHA256 checksum. Go is not required.
+Use Homebrew without sudo, and do not use the shell installer to update or remove
+a Homebrew-managed executable. If you already use an installer-managed system
+service, stop it before starting a Homebrew service; both use the same default port.
+
+Before the first start, create the user configuration. Skip `init` if you already
+have one; it refuses to overwrite an existing configuration unless `--force` is used:
+
+```sh
+oci-mirror-proxy init
+brew services start runui/oci-mirror-proxy/oci-mirror-proxy
+oci-mirror-proxy status
+oci-mirror-proxy remote update
+```
+
+The service runs as your current user, using the normal per-user configuration
+and administration socket. On macOS it starts at login; on Linux it uses a systemd
+user service. Without a service, run `oci-mirror-proxy serve` in the foreground.
+Logs are written to `$(brew --prefix)/var/log/oci-mirror-proxy.log`.
+`remote update` adds the default mirror catalog; use `remote update --all` on later
+updates to refresh every configured catalog while preserving its region selection.
+
+Installing or starting the Homebrew service does not change Docker settings.
+Once the service is running, follow [automatic Docker integration](/docs/docker-integration).
+On macOS, run these commands as the logged-in Docker Desktop user, without sudo:
+
+```sh
+oci-mirror-proxy dockerd plan
+oci-mirror-proxy dockerd apply
+oci-mirror-proxy doctor
+```
+
+If a Docker restart is pending, restart it when convenient. The explicit
+`dockerd apply --restart` option restarts Docker Desktop and interrupts running
+containers. See [macOS installation](/docs/macos-installation#docker-desktop)
+for details.
+
+Update and restart an existing Homebrew service:
+
+```sh
+brew update
+brew upgrade runui/oci-mirror-proxy/oci-mirror-proxy
+brew services restart runui/oci-mirror-proxy/oci-mirror-proxy
+```
+
+If Docker was configured to use the proxy, revert that integration **while the
+service is still running**, following the platform-specific
+[Docker integration instructions](/docs/docker-integration#recovery), and activate
+the restored Docker settings before stopping the proxy. On macOS:
+
+```sh
+oci-mirror-proxy dockerd revert --restart
+brew services stop runui/oci-mirror-proxy/oci-mirror-proxy
+brew uninstall runui/oci-mirror-proxy/oci-mirror-proxy
+brew untap runui/oci-mirror-proxy
+```
+
+`--restart` interrupts running containers. Skip the revert step if Docker was
+never connected to the proxy. Homebrew removal preserves user configuration,
+caches, and logs, and does not revert Docker settings automatically.
+
 ## Platforms and Windows installation
 
 Prebuilt binaries are available for the following platforms:

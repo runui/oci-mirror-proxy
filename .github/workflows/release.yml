@@ -91,3 +91,49 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS --clobber
           gh release edit "$RELEASE_TAG" --draft=false --prerelease="$prerelease"
+
+  homebrew:
+    name: Update Homebrew formula
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: homebrew-formula-update
+      cancel-in-progress: false
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Update formula from the latest stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+          latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          if [ "$RELEASE_TAG" != "$latest" ]; then
+            echo 'Skipping Homebrew update for a release that is not the latest stable version.'
+            exit 0
+          fi
+          gh release download "$RELEASE_TAG" --pattern SHA256SUMS --dir "$RUNNER_TEMP/homebrew-release"
+          node scripts/update-homebrew.mjs "$RELEASE_TAG" "$RUNNER_TEMP/homebrew-release/SHA256SUMS" Formula/oci-mirror-proxy.rb
+          node --test scripts/update-homebrew.test.mjs
+          git add -- Formula/oci-mirror-proxy.rb
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "chore(homebrew): update to $RELEASE_TAG"
+          gh auth setup-git
+          git push origin "HEAD:$DEFAULT_BRANCH"

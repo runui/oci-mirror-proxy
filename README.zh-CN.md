@@ -19,6 +19,15 @@ oci-mirror-proxy version
 
 默认安装到 `/usr/local/bin`，需要时会请求 sudo。
 
+macOS 或 Linux（Intel / Apple Silicon / ARM64）也可通过 Homebrew 安装：
+
+```sh
+brew tap runui/oci-mirror-proxy https://github.com/runui/oci-mirror-proxy.git
+brew install runui/oci-mirror-proxy/oci-mirror-proxy
+```
+
+首次配置、后台服务、Docker 接入与更新方法见 [Homebrew 安装指南](apps/docs/content/docs/installation.zh-CN.mdx#homebrew)。
+
 Linux 用户可安装系统服务并自动接入本机 Docker：
 
 ```sh

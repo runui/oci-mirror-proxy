@@ -3,7 +3,23 @@ name: Windows
 on:
   push:
     branches: [master]
+    paths:
+      - 'install.ps1'
+      - 'cmd/**/*.go'
+      - 'internal/**/*.go'
+      - 'internal/tests/install/*.ps1'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/windows.yml'
   pull_request:
+    paths:
+      - 'install.ps1'
+      - 'cmd/**/*.go'
+      - 'internal/**/*.go'
+      - 'internal/tests/install/*.ps1'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/windows.yml'
 
 permissions:
   contents: read

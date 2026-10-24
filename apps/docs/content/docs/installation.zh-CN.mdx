@@ -59,6 +59,68 @@ Linux、macOS 和 FreeBSD 默认安装到 `/usr/local/bin/oci-mirror-proxy`，�
 如需仅为当前用户安装，可选用 `--prefix "$HOME/.local"`，并将 `$HOME/.local/bin` 加入 PATH。
 现有配置会保留；不使用 `--service` 时，不会安装或重启服务。不带 `--service` 更新后，需要手动重启正在运行的代理。
 
+## Homebrew
+
+macOS（Apple Silicon 或 Intel）和 Linux（ARM64 或 x86-64）可通过 Homebrew 安装预编译版本。
+项目仓库同时作为 Homebrew tap，首次 `brew tap` 需要显式指定仓库 URL：
+
+```sh
+brew tap runui/oci-mirror-proxy https://github.com/runui/oci-mirror-proxy.git
+brew install runui/oci-mirror-proxy/oci-mirror-proxy
+oci-mirror-proxy version
+```
+
+Homebrew 会校验发布归档的 SHA256，无需安装 Go。不要使用 sudo 运行 Homebrew，
+也不要用 shell 安装脚本更新或卸载 Homebrew 管理的程序。
+如果已有安装脚本管理的系统服务，请先停止它，再启动 Homebrew 服务，避免默认端口冲突。
+
+首次启动前创建用户配置；如果已有配置，请跳过 `init`。不带 `--force` 的 `init` 不会覆盖已有配置：
+
+```sh
+oci-mirror-proxy init
+brew services start runui/oci-mirror-proxy/oci-mirror-proxy
+oci-mirror-proxy status
+oci-mirror-proxy remote update
+```
+
+服务以当前用户身份运行，使用默认的用户配置和管理套接字；macOS 在登录后启动，
+Linux 使用 systemd 用户服务。如不需要后台服务，可直接运行 `oci-mirror-proxy serve`。
+日志位于 `$(brew --prefix)/var/log/oci-mirror-proxy.log`。
+`remote update` 会添加默认镜像订阅；后续可用 `remote update --all` 更新所有已配置订阅，并保留各自的区域选择。
+
+安装或启动 Homebrew 服务不会自动修改 Docker 设置。服务运行后，参照[自动配置 Docker](/zh-CN/docs/docker-integration)接入。
+macOS 上以登录 Docker Desktop 的用户执行，不要使用 sudo：
+
+```sh
+oci-mirror-proxy dockerd plan
+oci-mirror-proxy dockerd apply
+oci-mirror-proxy doctor
+```
+
+若提示等待 Docker 重启，请在合适的时机重启。显式使用 `dockerd apply --restart` 会重启 Docker Desktop 并中断运行中的容器。
+详情见 [macOS 安装指南](/zh-CN/docs/macos-installation#docker-desktop)。
+
+更新并重启已有的 Homebrew 服务：
+
+```sh
+brew update
+brew upgrade runui/oci-mirror-proxy/oci-mirror-proxy
+brew services restart runui/oci-mirror-proxy/oci-mirror-proxy
+```
+
+如果 Docker 已接入代理，请在**服务仍运行时**按对应平台的 [Docker 恢复说明](/zh-CN/docs/docker-integration)撤销接入，
+确认恢复后的 Docker 设置生效，再停止代理。macOS 示例：
+
+```sh
+oci-mirror-proxy dockerd revert --restart
+brew services stop runui/oci-mirror-proxy/oci-mirror-proxy
+brew uninstall runui/oci-mirror-proxy/oci-mirror-proxy
+brew untap runui/oci-mirror-proxy
+```
+
+`--restart` 会中断运行中的容器；未接入 Docker 时跳过恢复步骤。
+Homebrew 卸载会保留用户配置、缓存和日志，不会自动恢复 Docker 设置。
+
 ## 更新与卸载
 
 ```sh
