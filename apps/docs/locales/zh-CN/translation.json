@@ -5,7 +5,7 @@
 		"primary": "主导航",
 		"changeTheme": "切换主题",
 		"theme": "主题",
-		"language": "中",
+		"language": "中文",
 		"openMenu": "打开菜单",
 		"closeMenu": "关闭菜单",
 		"navigation": "导航",
@@ -13,7 +13,7 @@
 		"documentation": "文档导航",
 		"install": "安装",
 		"docs": "文档",
-		"releases": "版本",
+		"releases": "版本发布",
 		"skip": "跳转到正文",
 		"translation": "翻译提示",
 		"fallback": "本页尚无中文翻译，以下显示英文原文。",
@@ -27,24 +27,24 @@
 		"error": { "label": "复制失败，请选中命令手动复制", "text": "重试" }
 	},
 	"seo": {
-		"title": "为 Docker 拉取提供更可靠的路径",
+		"title": "更可靠地拉取 Docker 镜像",
 		"description": "面向 Docker 的本地只读镜像代理。统一管理镜像源，自动隔离故障，并在镜像层下载中断后切换源续传。支持 Linux、macOS、Windows 和 FreeBSD。"
 	},
 	"home": {
 		"title": "多个镜像源，",
 		"titleAccent": "一个可靠的拉取入口",
-		"description": "把镜像源交给本地代理：故障自动切换，镜像层断点续传。复制命令，在终端运行，继续使用熟悉的 Docker",
+		"description": "用本地代理统一管理镜像源，故障时自动切换，下载中断后继续传输。在终端运行安装命令，即可继续使用熟悉的 Docker",
 		"install": "安装最新版本",
 		"platformLabel": "安装平台",
 		"verified": "校验 SHA256 · 保留已有配置",
 		"installOptions": "安装选项与卸载",
 		"installNotes": {
 			"linux": "粘贴到终端运行。安装并启动 systemd/OpenRC 服务，自动配置本机 Docker。系统更改会请求 sudo，不会自动重启 Docker",
-			"macos": "以 Docker Desktop 登录用户运行。安装 launchd 系统服务并配置 Docker Desktop。系统更改会请求 sudo，如提示待重启，请按安装器说明操作",
-			"windows": "在 PowerShell 中运行。先下载脚本，再安装 Windows 服务并配置 Docker Desktop。请确认管理员授权提示；不会自动重启 Docker",
+			"macos": "请以登录 Docker Desktop 的用户身份运行。脚本会安装 launchd 系统服务并配置 Docker Desktop，需要时请求 sudo 权限。如果提示重启，请按安装说明操作",
+			"windows": "在 PowerShell 中运行。脚本会安装 Windows 服务并配置 Docker Desktop，需要时请确认管理员授权。Docker 不会自动重启",
 			"freebsd": "仅安装程序至 /usr/local/bin，不注册服务。目录不可写时需要 root 或 sudo。请按安装指南启动代理，并在 Docker 所在主机配置连接"
 		},
-		"nextLabel": "下一步 / 拉取镜像",
+		"nextLabel": "下一步：拉取镜像",
 		"nextTitle": "下一条命令，还是你熟悉的 Docker",
 		"nextText": "按安装器输出完成激活。Docker 连接代理后，继续使用原来的命令即可",
 		"nextNote": "需要容器部署或手动配置？",
@@ -52,15 +52,15 @@
 		"mirrors": "镜像源",
 		"featuresLabel": "功能",
 		"features": [
-			{ "title": "镜像源，随时管理", "text": "添加、移除、禁用镜像源，无需重启 dockerd" },
-			{ "title": "故障隔离，而非扩散", "text": "熔断器隔离故障镜像源，探测成功后自动恢复" },
-			{ "title": "从中断处，继续下载", "text": "中断的镜像层可切换到另一个镜像源，继续传输" }
+			{ "title": "随时管理镜像源", "text": "添加、移除或禁用镜像源，无需重启 dockerd" },
+			{ "title": "自动隔离故障", "text": "暂时跳过故障镜像源，探测成功后自动恢复" },
+			{ "title": "从中断处继续下载", "text": "镜像层下载中断后，可切换到其他镜像源继续下载" }
 		],
-		"previewLabel": "预览 / 一次真实拉取",
-		"previewTitle": "更少等待，持续前进",
+		"previewLabel": "实际拉取演示",
+		"previewTitle": "拉取镜像，少等一会儿",
 		"previewText": "这次预览中，通过代理耗时 508.0 秒，直接使用镜像站耗时 740.3 秒。结果取决于网络环境和镜像源",
 		"previewLink": "查看对比与原始录制",
-		"previewMetric": "本次预览的速度比",
+		"previewMetric": "本次演示的速度对比",
 		"previewNote": "GIF 为加速预览 · 点击图片放大 · 按 × 或 Esc 关闭",
 		"recordings": [
 			{ "title": "直连镜像站 · 740.3 秒", "alt": "直接通过镜像站拉取 Docker 镜像" },

@@ -3,7 +3,7 @@ title: 远端镜像订阅
 description: 按区域订阅镜像目录，并保留本地选择。
 ---
 
-订阅 JSON 镜像目录，按区域选择镜像站，并保存到运行中服务的 `config.d` 配置目录。订阅前请先启动服务。
+订阅 JSON 格式的镜像目录后，可以按区域选择镜像站。配置会保存到运行中服务的 `config.d` 目录，订阅前请先启动服务。
 
 ```sh
 # 确保代理服务已运行：
@@ -15,7 +15,7 @@ oci-mirror-proxy remote update --all
 oci-mirror-proxy remote remove --url https://example.com/mirrors.json
 ```
 
-`update` 同时负责首次添加。上面的命令显式使用文档站发布的[镜像目录](/subscriptions/mirrors.json)：
+首次订阅也使用 `update`。上面的命令使用文档站发布的[镜像目录](/subscriptions/mirrors.json)：
 
 ```text
 https://ocimp.zmide.com/subscriptions/mirrors.json
@@ -23,9 +23,11 @@ https://ocimp.zmide.com/subscriptions/mirrors.json
 
 不传 `--url`、`--all` 时使用 CLI 内置的默认订阅。
 
-省略 `--regions` 时仅选择 `global` 节点；使用 `--regions cn,eu` 选择多个区域，或使用 `--regions ''` 选择全部站点。多个区域按精确标签取并集，不隐含包含 `global`。`global` 表示广泛可用，不保证所有地区均能访问。`--all` 保留各源已保存的区域选择；旧记录未保存区域时使用 `global`，与 `--url`、`--regions` 互斥。
+省略 `--regions` 时，只选择标记为 `global` 的站点。使用 `--regions cn,eu` 可选择多个区域，`--regions ''` 则选择全部站点。区域标签必须完全匹配，选择多个区域时会包含匹配任一标签的站点，但不会自动加入 `global`。`global` 表示适用范围较广，并不保证所有地区都能访问。
 
-`list/update/remove` 使用 `--admin-socket` 选择服务。更新、删除支持 `--dry-run` 和 `--no-reload`。预览只显示变更，不保存文件。筛选结果为空时默认拒绝，需要显式指定 `update --allow-empty`。`remove` 必须指定 `--url`。不提供后台自动更新任务。
+`--all` 会保留各订阅源已保存的区域设置，旧记录没有区域设置时使用 `global`。该选项不能与 `--url` 或 `--regions` 同时使用。
+
+`list`、`update` 和 `remove` 可通过 `--admin-socket` 指定服务。更新和删除支持 `--dry-run` 和 `--no-reload`。预览只显示变更，不保存文件。更新时如果没有选中任何镜像站，默认会报错，如需允许空结果，请使用 `update --allow-empty`。`remove` 必须指定 `--url`。订阅不会在后台自动更新。
 
 <span id="查看远端目录" />
 
@@ -39,9 +41,9 @@ oci-mirror-proxy remote show --url https://example.com/mirrors.json
 oci-mirror-proxy remote show --url https://example.com/mirrors.json --regions cn,apac
 ```
 
-省略 `--url` 时使用内置默认订阅。每个镜像端点一行，显示站点名称、完整区域标签、Registry、端点 URL 和官网；没有官网时显示 `-`，官网查询参数会隐藏。站点和端点保留目录原有顺序，不合并不同站点声明的相同端点。
+省略 `--url` 时使用默认订阅。每行显示一个镜像地址，包括站点名称、全部区域标签、镜像仓库、镜像 URL 和官网。没有官网时显示 `-`，官网 URL 中的查询参数会隐藏。站点和地址按目录中的原有顺序显示，不同站点使用相同地址时也会分别列出。
 
-省略 `--regions` 或传空字符串时显示全部站点；多个区域取并集，匹配的站点展示其全部端点。区域不存在时返回错误并列出可用标签。空目录或筛选后无结果时显示 `no matching mirrors`，正常退出。
+省略 `--regions` 或传入空字符串时显示全部站点。指定多个区域时，只要匹配其中一个标签，就会显示该站点的所有镜像地址。区域不存在时会报错并列出可用标签。目录为空或没有匹配结果时，显示 `no matching mirrors` 并正常退出。
 
 `show` 仅接受 `--url`、`--regions` 和帮助参数，不依赖本地配置或运行中的代理，不创建配置文件、不触发重载。输出只代表远端目录内容，不代表本地启用状态或站点健康状态，也不会访问镜像端点或官网。下载限制和目录校验规则与更新命令相同。
 
@@ -58,9 +60,11 @@ config.d/example.com@0123456789abcdef.yaml.bak
 
 每个源使用独立文件，即使两个 URL 的主机名相同。请保留文件头中的来源 URL 和区域注释，以便 CLI 识别订阅。
 
-若 URL 含私有查询令牌，应保护配置目录；CLI 显示时隐藏查询参数，生成文件和备份权限为 `0600`。
+如果订阅 URL 的查询参数中含有私密令牌，请妥善保护配置目录。CLI 显示 URL 时会隐藏查询参数，生成的文件和备份权限均为 `0600`。
 
-文件采用原子写入；重载时会验证完整配置后再应用。已保存但无效的配置文件可通过 CLI 修复或删除。上一版文件备份为 `.yaml.bak`。备份失败则不更新当前文件。首次创建没有上一版备份；内容不变时不改写当前文件和备份。删除源前也备份。 `.bak` 不参与配置加载。需要恢复时，手动把 `.bak` 复制回原 `.yaml` 路径后执行 `reload`。
+文件通过原子替换保存，重载前会先校验完整配置。已保存但无效的配置文件可以通过 CLI 修复或删除。更新前，旧文件会备份为 `.yaml.bak`，备份失败则不会继续更新。首次创建时没有旧文件，因此不生成备份。内容没有变化时，当前文件和备份都不会改写。删除订阅源前也会备份。
+
+`.bak` 文件不会被加载。需要恢复时，将其复制回原来的 `.yaml` 路径，再执行 `reload`。
 
 使用 `--all` 时，某个源失败不会回滚其他成功更新的源，只要有失败就返回退出码 `1`，最后统一尝试重载。文件操作需要服务运行；`--no-reload` 只保存不应用，文件将在成功重载或重启后生效。若文件已更新但重载被拒绝或超时，CLI 明确报告“文件已保存、运行配置未确认”，返回 `1`，已保存的文件会保留，可执行 `oci-mirror-proxy reload` 或再次更新来重试重载。
 
@@ -77,7 +81,9 @@ oci-mirror-proxy upstream disable --url https://docker.example.com
 oci-mirror-proxy upstream enable --url https://docker.example.com
 ```
 
-启用、禁用写入最后加载的 `config.d/local-overrides.yaml`，只覆盖实际存在的 URL，因此既能跨订阅更新保留选择，也不会在最后一个源被删除后重新引入旧 URL。自定义超时、认证、TLS 等也可放入该文件。不要直接修改生成字段，下一次更新会替换。 `upstream remove --url` 删除当前各处的定义，但下次订阅更新可能恢复；持久阻止某个 URL 应使用禁用。
+启用或禁用的设置会写入最后加载的 `config.d/local-overrides.yaml`，只对现有 URL 生效。因此，更新订阅不会丢失本地选择，删除最后一个提供该 URL 的订阅源后，也不会将它重新加入。自定义超时、认证和 TLS 等设置也可以写在此文件中。
+
+不要直接修改订阅生成的字段，下次更新时这些内容会被替换。`upstream remove --url` 会删除当前配置中的相关定义，但下次更新订阅时可能再次添加。如果希望持续屏蔽某个 URL，请将其禁用。
 
 <span id="json-格式与信任边界" />
 
@@ -85,7 +91,7 @@ oci-mirror-proxy upstream enable --url https://docker.example.com
 
 格式以发布的 [mirrors.json](/subscriptions/mirrors.json) 和 [schema.json](/subscriptions/schema.json) 为准。镜像站包含展示名称、多个区域、以及明确的 registry/URL，不需要镜像站 ID。拒绝未知字段、重复 JSON 键、错误版本、未知区域和非法地址。生成上游使用无凭据的 `auth: {type: token}`，兼容匿名 Bearer 质询。
 
-下载超时 30 秒、解压后正文上限 4 MiB、限制重定向次数；正常验证 HTTPS 证书，拒绝 HTTPS 降级跳转。显式 HTTP 源会警告，支持标准代理环境变量。订阅不能下发凭据、本地路径、TLS 绕过或全局代理设置。
+下载超时为 30 秒，解压后的内容不得超过 4 MiB，重定向次数也有限制。下载时会校验 HTTPS 证书，拒绝从 HTTPS 跳转到 HTTP。使用 HTTP 订阅源时会显示警告。下载支持标准代理环境变量，但订阅内容不能指定凭据、本地路径、跳过 TLS 校验或全局代理设置。
 
 订阅是信任入口：摘要校验不能证明可变 tag 的解析结果真实或新鲜。区域不代表可用性承诺，使用前应查看[镜像目录说明](https://github.com/runui/oci-mirror-proxy/blob/master/subscriptions/README.zh-CN.md)、运营方限制，并检查本地网络的可达性。
 

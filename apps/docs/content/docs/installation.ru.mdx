@@ -110,7 +110,7 @@ Invoke-WebRequest https://ocimp.zmide.com/install.ps1 -OutFile install.ps1
 
 Управление службой и устранение неполадок описаны в разделе [эксплуатации](/ru/docs/operations). Необязательные параметры установки: `Get-Help .\install.ps1 -Full`.
 
-Параметр `--service` поддерживает системные службы systemd/OpenRC в Linux и launchd в macOS. Установка через sudo без `--service` создаёт пользовательскую конфигурацию от имени проверенного пользователя, вызвавшего sudo. См. [установку и права доступа в macOS](/ru/docs/macos-installation) для управления службой и восстановления пользовательских файлов, оставшихся во владении root после старых установок.
+Параметр `--service` поддерживает системные службы systemd/OpenRC в Linux и launchd в macOS. Управление службами macOS описано в [руководстве по установке](/ru/docs/macos-installation).
 
 ## Обновление и удаление [#update-and-uninstall]
 

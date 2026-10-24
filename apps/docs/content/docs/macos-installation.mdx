@@ -1,9 +1,9 @@
 ---
 title: macOS installation and services
-description: Manage launchd services, Docker Desktop integration, and permissions on macOS.
+description: Manage launchd services and Docker Desktop integration on macOS.
 ---
 
-Run the installer normally when the installation prefix is writable by your account. To install the executable into a protected prefix, use sudo. A sudo installation without `--service` initializes configuration and synchronizes subscriptions as the verified invoking user, not as root. If the account cannot be verified, automatic synchronization is skipped with a warning.
+Run the installer normally when the installation prefix is writable by your account. To install the executable into a protected prefix, use sudo.
 
 ## System service
 
@@ -21,7 +21,7 @@ This installs a launchd LaunchDaemon, which starts at boot without an interactiv
 | Default administration socket | `/var/run/oci-mirror-proxy/admin.sock`                                         |
 | Logs                          | `/var/log/oci-mirror-proxy/stdout.log`, `/var/log/oci-mirror-proxy/stderr.log` |
 
-Existing configuration is preserved, including a custom administration socket. The daemon recreates its socket directory on startup. Older configurations with no explicit socket use `/var/run/oci-mirror-proxy/admin.sock` through the service's runtime environment.
+Existing configuration is preserved, including a custom administration socket.
 
 The standard system administration socket is available to all local users without sudo. Its root-owned directory uses mode `0711` and the socket uses mode `0666`; these permissions are recreated at each startup. Local users can both inspect status and change the proxy configuration through the management API. Do not use this system-service mode on hosts with untrusted local accounts. Private instances and custom socket paths retain owner-only access.
 
@@ -68,25 +68,3 @@ If Docker uses this proxy, first run `oci-mirror-proxy dockerd revert --restart`
 sudo launchctl bootout system/com.runui.oci-mirror-proxy
 sudo rm /Library/LaunchDaemons/com.runui.oci-mirror-proxy.plist
 ```
-
-## Permission denied in a user configuration
-
-Older privileged installations or a manual `sudo oci-mirror-proxy serve` may have left root-owned files in the user's configuration or cache directory. A normal user cannot open a private root-owned `config.yaml.lock`.
-
-Stop all proxy processes using that configuration before repairing permissions. Inspect ownership first:
-
-```sh
-ls -ld "$HOME/Library/Application Support/oci-mirror-proxy"
-ls -la "$HOME/Library/Application Support/oci-mirror-proxy"
-ls -ld "$HOME/Library/Caches/oci-mirror-proxy"
-```
-
-Only if these are your own application directories, and not shared directories or symlinks, restore their ownership. Run the cache command only if it exists:
-
-```sh
-sudo chown -R "$(id -un):$(id -gn)" "$HOME/Library/Application Support/oci-mirror-proxy"
-sudo chown -R "$(id -un):$(id -gn)" "$HOME/Library/Caches/oci-mirror-proxy"
-oci-mirror-proxy serve
-```
-
-Do not apply these commands to system-service configuration or the entire Library directory. Do not use `chmod 777` or delete the lock file: configuration can contain secrets, and a stable lock file coordinates concurrent processes. The installer does not automatically change ownership of existing user data.

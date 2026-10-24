@@ -75,7 +75,7 @@ Start-Service oci-mirror-proxy
 
 本地用户可通过管理 API 查询和修改系统服务；私有前台实例仍仅限所属账户访问，远程管道连接被拒绝。更新程序并重启服务一次后，新的管道 ACL 才会生效。
 
-每次 Windows 安装都会打印持久化日志路径。用户阶段日志位于 `%LOCALAPPDATA%\oci-mirror-proxy-installer\<run-id>\install.log`，提权阶段日志位于 `%ProgramData%\oci-mirror-proxy-installer\<run-id>\install.log`，后者需管理员权限读取。即使提权窗口关闭，原窗口仍会输出退出码和日志路径。下载进度不再刷屏；原生命令警告以普通文本显示，不单独表示安装失败。
+每次在 Windows 上安装时，脚本都会显示日志保存路径。普通用户阶段的日志位于 `%LOCALAPPDATA%\oci-mirror-proxy-installer\<run-id>\install.log`，管理员阶段的日志位于 `%ProgramData%\oci-mirror-proxy-installer\<run-id>\install.log`，后者需要管理员权限才能读取。即使管理员窗口已经关闭，原窗口仍会显示退出码和日志路径。外部命令输出的警告不一定表示安装失败。
 
 普通用户也可运行系统安装的程序，使用上述 `$proxy` 完整路径，或打开新终端直接运行 `oci-mirror-proxy`。安装器会自动将程序加入 PATH。在普通 PowerShell 中运行 `init` 和 `serve` 即使用自己的配置，不要传入系统服务的 `--config` 或管理管道。如果服务已占用 24817 端口，启动第二个实例前请修改用户配置的 `listen` 和 `advertise`。用户配置位于 `%APPDATA%\oci-mirror-proxy\config.yaml`。只有服务管理操作需要管理员 PowerShell。
 

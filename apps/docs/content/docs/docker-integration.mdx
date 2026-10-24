@@ -44,6 +44,6 @@ Only changed files are backed up and atomically replaced. Repeated apply/revert 
 
 Revert before removing the proxy deployment. Restarting Docker may regenerate internal network identifiers and logs; restoring configuration is not a VM disk snapshot rollback.
 
-## Verified scope
+## Compatibility [#verified-scope]
 
-Docker Desktop 4.95.0 with Engine 29.8.2 on Apple Silicon was verified with the containerd image store: automatic configuration, restart, ordinary Docker Hub image-name pulls through a controlled upstream (including a real image layer), diagnostics, repeated apply, and configuration restoration (historical behavior). This does not establish support for every Desktop release, alternative macOS engines, BuildKit mirrors, or every public upstream. No automatic Desktop upgrade is performed.
+Docker Desktop integration supports Docker Hub mirrors, not BuildKit mirrors or alternative macOS container engines. Availability of public mirrors depends on the provider and your network.

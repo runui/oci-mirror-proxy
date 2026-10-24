@@ -1,9 +1,9 @@
 ---
 title: macOS 安装与服务
-description: 管理 macOS 上的 launchd 服务、Docker Desktop 接入与文件权限。
+description: 管理 macOS 上的 launchd 服务与 Docker Desktop 接入。
 ---
 
-安装目录允许当前用户写入时，可直接运行安装脚本；安装到受保护的目录时需要 sudo。不带 `--service` 的 sudo 安装会以经过验证的原用户身份初始化配置并同步订阅，而不是以 root 身份操作用户文件。无法验证用户身份时，安装器会跳过自动同步并给出警告。
+如果当前用户有安装目录的写入权限，可以直接运行安装脚本。安装到受保护的目录时，需要 sudo 权限。
 
 ## 系统服务 [#system-service]
 
@@ -21,7 +21,7 @@ sudo sh ./install.sh --service
 | 默认管理套接字 | `/var/run/oci-mirror-proxy/admin.sock`                                         |
 | 日志           | `/var/log/oci-mirror-proxy/stdout.log`、`/var/log/oci-mirror-proxy/stderr.log` |
 
-已有配置会保留，包括自定义管理套接字路径。服务每次启动时会重新创建套接字目录。旧配置未显式指定套接字时，通过服务运行环境使用 `/var/run/oci-mirror-proxy/admin.sock`。
+已有配置会保留，包括自定义管理套接字路径。
 
 标准系统管理套接字允许所有本地用户访问，无需 sudo。目录由 root 所有，权限为 `0711`；套接字权限为 `0666`，每次启动时都会恢复这些权限。本地用户既能查询状态，也能通过管理 API 修改代理配置。如果主机上存在不可信的本地账号，请勿使用此系统服务模式。私有实例和自定义套接字路径仍仅允许所有者访问。
 
@@ -35,7 +35,7 @@ sudo launchctl kickstart -k system/com.runui.oci-mirror-proxy
 
 ## Docker Desktop
 
-Shell 安装器使用 `--service` 时还会尝试接入 Docker Desktop，除非指定 `--skip-docker`。安装器不会自动重启 Docker，请按输出提示完成激活。使用 Homebrew 服务、手动安装的服务，或需要手动恢复时，以登录 Docker Desktop 的用户执行以下命令，不要使用 sudo：
+使用 `--service` 安装时，脚本还会尝试配置 Docker Desktop，指定 `--skip-docker` 可以跳过。脚本不会自动重启 Docker，请按提示使配置生效。如果使用 Homebrew 或手动安装的服务，也可以执行以下命令配置 Docker Desktop。请以登录 Docker Desktop 的用户身份运行，不要使用 sudo：
 
 ```sh
 oci-mirror-proxy dockerd plan
@@ -68,25 +68,3 @@ export PATH="/usr/local/bin:$PATH"
 sudo launchctl bootout system/com.runui.oci-mirror-proxy
 sudo rm /Library/LaunchDaemons/com.runui.oci-mirror-proxy.plist
 ```
-
-## 用户配置提示权限不足 [#permission-denied-in-a-user-configuration]
-
-旧版提权安装或手动运行 `sudo oci-mirror-proxy serve`，可能在用户配置或缓存目录中留下 root 所有的文件。普通用户无法打开仅所有者可访问、但由 root 所有的 `config.yaml.lock`。
-
-修复权限前，请停止所有使用该配置的代理进程，并先检查文件所有者：
-
-```sh
-ls -ld "$HOME/Library/Application Support/oci-mirror-proxy"
-ls -la "$HOME/Library/Application Support/oci-mirror-proxy"
-ls -ld "$HOME/Library/Caches/oci-mirror-proxy"
-```
-
-仅当这些目录确实是你自己的应用目录、不是共享目录或符号链接时，才恢复所有权。缓存目录存在时才执行对应命令：
-
-```sh
-sudo chown -R "$(id -un):$(id -gn)" "$HOME/Library/Application Support/oci-mirror-proxy"
-sudo chown -R "$(id -un):$(id -gn)" "$HOME/Library/Caches/oci-mirror-proxy"
-oci-mirror-proxy serve
-```
-
-不要将这些命令用于系统服务配置或整个 Library 目录。不要使用 `chmod 777`，也不要删除锁文件：配置可能包含敏感信息，而固定的锁文件用于协调并发进程。安装器不会自动修改已有用户数据的所有者。
