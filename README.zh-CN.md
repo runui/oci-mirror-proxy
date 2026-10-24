@@ -22,8 +22,8 @@ oci-mirror-proxy version
 macOS 或 Linux（Intel / Apple Silicon / ARM64）也可通过 Homebrew 安装：
 
 ```sh
-brew tap runui/oci-mirror-proxy https://github.com/runui/oci-mirror-proxy.git
-brew install runui/oci-mirror-proxy/oci-mirror-proxy
+brew tap zmide/tap
+brew install zmide/tap/oci-mirror-proxy
 ```
 
 首次配置、后台服务、Docker 接入与更新方法见 [Homebrew 安装指南](apps/docs/content/docs/installation.zh-CN.mdx#homebrew)。

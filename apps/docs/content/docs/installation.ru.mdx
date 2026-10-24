@@ -36,11 +36,11 @@ curl -fsSL https://ocimp.zmide.com/install.sh | DOWNLOAD_BASE_URL=https://mirror
 
 ## Homebrew
 
-Установите готовый релиз в macOS (Apple Silicon или Intel) либо Linux (ARM64 или x86-64). Репозиторий проекта также служит Homebrew tap, поэтому при первом `brew tap` требуется явный URL репозитория:
+Установите готовый релиз в macOS (Apple Silicon или Intel) либо Linux (ARM64 или x86-64). Пакеты доступны в общем Homebrew tap `zmide/tap`:
 
 ```sh
-brew tap runui/oci-mirror-proxy https://github.com/runui/oci-mirror-proxy.git
-brew install runui/oci-mirror-proxy/oci-mirror-proxy
+brew tap zmide/tap
+brew install zmide/tap/oci-mirror-proxy
 oci-mirror-proxy version
 ```
 
@@ -50,7 +50,7 @@ Homebrew проверяет SHA256 архива релиза. Go не требу
 
 ```sh
 oci-mirror-proxy init
-brew services start runui/oci-mirror-proxy/oci-mirror-proxy
+brew services start zmide/tap/oci-mirror-proxy
 oci-mirror-proxy status
 oci-mirror-proxy remote update
 ```
@@ -71,17 +71,16 @@ oci-mirror-proxy doctor
 
 ```sh
 brew update
-brew upgrade runui/oci-mirror-proxy/oci-mirror-proxy
-brew services restart runui/oci-mirror-proxy/oci-mirror-proxy
+brew upgrade zmide/tap/oci-mirror-proxy
+brew services restart zmide/tap/oci-mirror-proxy
 ```
 
 Если Docker настроен на использование прокси, отмените интеграцию **пока служба ещё работает**, следуя [инструкциям восстановления для своей платформы](/ru/docs/docker-integration#recovery). До остановки прокси активируйте восстановленные настройки Docker. В macOS:
 
 ```sh
 oci-mirror-proxy dockerd revert --restart
-brew services stop runui/oci-mirror-proxy/oci-mirror-proxy
-brew uninstall runui/oci-mirror-proxy/oci-mirror-proxy
-brew untap runui/oci-mirror-proxy
+brew services stop zmide/tap/oci-mirror-proxy
+brew uninstall zmide/tap/oci-mirror-proxy
 ```
 
 `--restart` прерывает работающие контейнеры. Если Docker не подключался к прокси, пропустите отмену интеграции. Удаление через Homebrew сохраняет пользовательскую конфигурацию, кеши и журналы и не отменяет настройки Docker автоматически.

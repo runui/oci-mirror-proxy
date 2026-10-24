@@ -24,8 +24,8 @@ Installs to `/usr/local/bin` by default, requesting sudo if needed.
 Or install with Homebrew on macOS or Linux (Intel/Apple Silicon/ARM64):
 
 ```sh
-brew tap runui/oci-mirror-proxy https://github.com/runui/oci-mirror-proxy.git
-brew install runui/oci-mirror-proxy/oci-mirror-proxy
+brew tap zmide/tap
+brew install zmide/tap/oci-mirror-proxy
 ```
 
 See [Homebrew setup and services](apps/docs/content/docs/installation.mdx#homebrew)

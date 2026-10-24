@@ -50,12 +50,11 @@ updating without `--service`.
 ## Homebrew
 
 Install the prebuilt release on macOS (Apple Silicon or Intel) or Linux (ARM64 or
-x86-64). The project repository also serves as its Homebrew tap, so the explicit
-repository URL is required on the first `brew tap`:
+x86-64). Packages are maintained in the shared `zmide/tap` Homebrew tap:
 
 ```sh
-brew tap runui/oci-mirror-proxy https://github.com/runui/oci-mirror-proxy.git
-brew install runui/oci-mirror-proxy/oci-mirror-proxy
+brew tap zmide/tap
+brew install zmide/tap/oci-mirror-proxy
 oci-mirror-proxy version
 ```
 
@@ -69,7 +68,7 @@ have one; it refuses to overwrite an existing configuration unless `--force` is 
 
 ```sh
 oci-mirror-proxy init
-brew services start runui/oci-mirror-proxy/oci-mirror-proxy
+brew services start zmide/tap/oci-mirror-proxy
 oci-mirror-proxy status
 oci-mirror-proxy remote update
 ```
@@ -100,8 +99,8 @@ Update and restart an existing Homebrew service:
 
 ```sh
 brew update
-brew upgrade runui/oci-mirror-proxy/oci-mirror-proxy
-brew services restart runui/oci-mirror-proxy/oci-mirror-proxy
+brew upgrade zmide/tap/oci-mirror-proxy
+brew services restart zmide/tap/oci-mirror-proxy
 ```
 
 If Docker was configured to use the proxy, revert that integration **while the
@@ -111,9 +110,8 @@ the restored Docker settings before stopping the proxy. On macOS:
 
 ```sh
 oci-mirror-proxy dockerd revert --restart
-brew services stop runui/oci-mirror-proxy/oci-mirror-proxy
-brew uninstall runui/oci-mirror-proxy/oci-mirror-proxy
-brew untap runui/oci-mirror-proxy
+brew services stop zmide/tap/oci-mirror-proxy
+brew uninstall zmide/tap/oci-mirror-proxy
 ```
 
 `--restart` interrupts running containers. Skip the revert step if Docker was

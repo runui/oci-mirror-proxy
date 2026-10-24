@@ -55,11 +55,11 @@ Linux、macOS 和 FreeBSD 默认安装到 `/usr/local/bin/oci-mirror-proxy`，�
 
 ## Homebrew
 
-macOS（Apple Silicon 或 Intel）和 Linux（ARM64 或 x86-64）可通过 Homebrew 安装预编译版本。项目仓库同时作为 Homebrew tap，首次 `brew tap` 需要显式指定仓库 URL：
+macOS（Apple Silicon 或 Intel）和 Linux（ARM64 或 x86-64）可通过 Homebrew 安装预编译版本，安装配方由共享的 `zmide/tap` 仓库维护：
 
 ```sh
-brew tap runui/oci-mirror-proxy https://github.com/runui/oci-mirror-proxy.git
-brew install runui/oci-mirror-proxy/oci-mirror-proxy
+brew tap zmide/tap
+brew install zmide/tap/oci-mirror-proxy
 oci-mirror-proxy version
 ```
 
@@ -69,7 +69,7 @@ Homebrew 会校验发布归档的 SHA256，无需安装 Go。不要使用 sudo �
 
 ```sh
 oci-mirror-proxy init
-brew services start runui/oci-mirror-proxy/oci-mirror-proxy
+brew services start zmide/tap/oci-mirror-proxy
 oci-mirror-proxy status
 oci-mirror-proxy remote update
 ```
@@ -92,17 +92,16 @@ oci-mirror-proxy doctor
 
 ```sh
 brew update
-brew upgrade runui/oci-mirror-proxy/oci-mirror-proxy
-brew services restart runui/oci-mirror-proxy/oci-mirror-proxy
+brew upgrade zmide/tap/oci-mirror-proxy
+brew services restart zmide/tap/oci-mirror-proxy
 ```
 
 如果 Docker 已接入代理，请在**服务仍运行时**按对应平台的 [Docker 恢复说明](/zh-CN/docs/docker-integration)撤销接入，确认恢复后的 Docker 设置生效，再停止代理。macOS 示例：
 
 ```sh
 oci-mirror-proxy dockerd revert --restart
-brew services stop runui/oci-mirror-proxy/oci-mirror-proxy
-brew uninstall runui/oci-mirror-proxy/oci-mirror-proxy
-brew untap runui/oci-mirror-proxy
+brew services stop zmide/tap/oci-mirror-proxy
+brew uninstall zmide/tap/oci-mirror-proxy
 ```
 
 `--restart` 会中断运行中的容器。如果没有配置过 Docker 接入，可以跳过恢复步骤。通过 Homebrew 卸载会保留用户配置、缓存和日志，不会自动恢复 Docker 设置。

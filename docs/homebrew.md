@@ -1,52 +1,34 @@
 # Homebrew distribution
 
-The project repository is also a Homebrew tap. It installs the prebuilt GitHub
-release for macOS and Linux on ARM64 and x86-64, with no Go build dependency.
-User-facing commands, service setup, and removal are documented in the
-[installation guide](../apps/docs/content/docs/installation.mdx#homebrew).
-
-## Release updates
-
-After the GitHub release workflow publishes the latest stable release, its
-`homebrew` job regenerates `Formula/oci-mirror-proxy.rb` from that release's
-`SHA256SUMS` and commits only the formula to the repository's default branch.
-Prereleases and releases that are not the latest stable version are skipped.
-No separate tap repository or personal access token is required.
-
-The job uses the repository's `GITHUB_TOKEN` with `contents: write`. Repository
-rules must allow GitHub Actions to push the formula update to the default branch.
-If a branch protection rule blocks the push, update the formula through the normal
-review process instead. To regenerate it manually from the repository root:
+Homebrew packages are maintained in
+[`zmide/homebrew-tap`](https://github.com/zmide/homebrew-tap). Binaries and
+`SHA256SUMS` are published in this application's GitHub Releases.
 
 ```sh
-tag=v1.0.18
-mkdir -p dist/homebrew
-gh release download "$tag" --repo runui/oci-mirror-proxy \
-  --pattern SHA256SUMS --dir dist/homebrew --clobber
-node scripts/update-homebrew.mjs "$tag" dist/homebrew/SHA256SUMS Formula/oci-mirror-proxy.rb
-node --test scripts/update-homebrew.test.mjs
+brew install zmide/tap/oci-mirror-proxy
 ```
 
-Update the tag to the desired stable version. The generator rejects missing or
-duplicate checksums, invalid checksum entries, and non-stable version tags.
-Edit the generator, rather than the generated Ruby file, when changing the formula's
-installation, caveats, service, or test definitions.
+See the [installation guide](../apps/docs/content/docs/installation.mdx#homebrew)
+for configuration, services, upgrades, and removal.
 
-## Validation
+## Release automation
 
-`.github/workflows/homebrew.yml` installs the formula from the checked-out commit
-on macOS and Linux, runs `brew test`, and checks the service metadata. It does not
-start the proxy or modify Docker settings. Formula generation tests also run in
-the release workflow before committing an update.
+After publishing a stable release, the release workflow sends an
+`update-package` repository dispatch to `zmide/homebrew-tap`, containing the
+package name and release tag. It does not commit files to this repository.
 
-To test a formula locally, use a tap containing the proposed commit, then run:
+Configure the `HOMEBREW_TAP_TOKEN` Actions secret here with a fine-grained personal
+access token scoped only to `zmide/homebrew-tap`, with `Contents: Read and write`
+permission. A GitHub App installation token with equivalent access can also be
+used if the workflow is adapted to generate it.
 
-```sh
-brew install runui/oci-mirror-proxy/oci-mirror-proxy
-brew test runui/oci-mirror-proxy/oci-mirror-proxy
-brew services info runui/oci-mirror-proxy/oci-mirror-proxy
-```
+The tap validates the package and latest stable release, generates the formula
+from release checksums, installs and tests it on macOS and Linux, and commits
+the result to its own default branch. Formula generators and Homebrew tests
+live in the tap repository.
 
-Commits made with `GITHUB_TOKEN` do not trigger another push workflow, so generated
-release updates run the generator tests directly; installation CI runs on ordinary
-pushes, pull requests, or manual workflow dispatches.
+A successful notification only confirms that GitHub accepted the event. Monitor
+the tap's Actions for installation and publication results. To retry or bootstrap
+an existing release, run its `Update package` workflow manually with package
+`oci-mirror-proxy` and the stable release tag. The receiving workflow must already
+exist on the tap's default branch.
