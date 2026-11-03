@@ -14,91 +14,23 @@ jobs:
     container:
       image: catthehacker/ubuntu:act-latest
     env:
-      # The runner must mount its Docker socket into the job container.
       DOCKER_HOST: unix:///var/run/docker.sock
-      # Gitea does not provide GitHub's build summary/artifact services.
-      DOCKER_BUILD_SUMMARY: 'false'
-      DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
       - name: Check out source
         uses: https://github.com/actions/checkout@v4
         with:
           persist-credentials: false
-
-      - name: Check Docker and Compose
-        run: |
-          set -eu
-          if [ ! -S /var/run/docker.sock ]; then
-            echo 'Docker socket is missing. Configure the runner to mount /var/run/docker.sock into job containers.' >&2
-            exit 1
-          fi
-          for attempt in $(seq 1 30); do
-            if docker info >/dev/null 2>&1; then break; fi
-            sleep 2
-          done
-          docker info
-          docker compose config --quiet
-
-      - name: Set up Buildx
-        uses: https://github.com/docker/setup-buildx-action@v3
-        with:
-          cache-binary: false
-
-      - name: Test
-        uses: https://github.com/docker/build-push-action@v6
-        with:
-          context: .
-          target: test
-          push: false
-
-      - name: Prepare image tags
-        id: image
+      - name: Install Dagger
+        run: sh scripts/setup-dagger.sh
+      - name: Test and build pull request images
+        if: github.event_name != 'push'
+        run: dagger api call ci container-check --progress report -v
+      - name: Test, build and publish images
+        if: github.event_name == 'push'
         env:
-          REF: ${{ github.ref }}
-          REF_NAME: ${{ github.ref_name }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
-        run: |
-          set -eu
-          registry=${SERVER_URL#https://}
-          registry=${registry#http://}
-          registry=${registry%/}
-          image="$registry/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
-          version=dev
-          tags="$image:dev"
-          case "$REF" in
-            refs/tags/v*)
-              version=$REF_NAME
-              # OCI tags cannot contain '+' and are limited to 128 characters.
-              case "$version" in
-                *[!a-zA-Z0-9_.-]*|'') echo 'Invalid container version tag' >&2; exit 1 ;;
-              esac
-              [ "${#version}" -le 128 ] || { echo 'Container tag too long' >&2; exit 1; }
-              tags="$image:$version"
-              # Prereleases must not move the stable latest tag.
-              case "$version" in
-                *-*) ;;
-                *) tags="$tags,$image:latest" ;;
-              esac
-              ;;
-          esac
-          printf 'registry=%s\nversion=%s\ntags=%s\n' "$registry" "$version" "$tags" >> "$GITHUB_OUTPUT"
-
-      - name: Log in to registry
-        if: github.event_name == 'push'
-        uses: https://github.com/docker/login-action@v3
-        with:
-          registry: ${{ steps.image.outputs.registry }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-
-      - name: Build and publish container
-        uses: https://github.com/docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          build-args: VERSION=${{ steps.image.outputs.version }}
-          tags: ${{ steps.image.outputs.tags }}
-          push: ${{ github.event_name == 'push' }}
-          # Pull requests build both architectures without credentials or publication.
-          outputs: ${{ github.event_name != 'push' && 'type=oci,dest=/tmp/oci-mirror-proxy.tar' || '' }}
+          REF: ${{ github.ref }}
+        run: dagger api call ci container-publish --server="$SERVER_URL" --repository="$REPOSITORY" --ref="$REF" --username="$REGISTRY_USERNAME" --password=env:REGISTRY_PASSWORD --progress report -v

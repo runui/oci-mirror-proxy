@@ -32,24 +32,14 @@ jobs:
     name: Static export and links
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: apps/docs
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: apps/docs/package-lock.json
-      - run: npm ci
-      - run: npm run types:check
-      - run: npm test
-      - run: npm run check:i18n
-      - run: npm run build
-      - run: npm run check:links
+      - name: Install Dagger
+        run: sh scripts/setup-dagger.sh
+      - name: Validate and export documentation
+        run: dagger api call ci docs export --path=apps/docs/out --progress report -v
       - uses: actions/upload-artifact@v4
         with:
           name: documentation-static-export

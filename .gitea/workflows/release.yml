@@ -13,39 +13,26 @@ jobs:
   release:
     runs-on: ubuntu-latest
     container:
-      image: golang:1.26.8-bookworm
+      image: catthehacker/ubuntu:act-latest
+    env:
+      # As in the container workflow, mount the runner's Docker socket.
+      DOCKER_HOST: unix:///var/run/docker.sock
     steps:
-      - name: Install CI tools
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl jq git nodejs
-
       - name: Check out source
         uses: https://github.com/actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Test
-        run: go test -count=1 ./...
+      - name: Install Dagger
+        run: |
+          docker info
+          sh scripts/setup-dagger.sh
 
-      - name: Validate release tag
+      - name: Test and build verified release archives
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          case "$RELEASE_TAG" in
-            v*[!a-zA-Z0-9._+-]*|'') echo 'Invalid release tag' >&2; exit 1 ;;
-            v*) ;;
-            *) echo 'Release tags must start with v' >&2; exit 1 ;;
-          esac
-
-      - name: Build release archives
-        uses: https://github.com/goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: v2.18.3
-          args: release --clean --skip=publish
+        run: dagger api call ci release-build --tag="$RELEASE_TAG" export --path=dist --progress report -v
 
       - name: Publish Gitea release
         env:
@@ -53,61 +40,5 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          [ -n "$RELEASE_TOKEN" ] || { echo 'Set the RELEASE_TOKEN repository secret first' >&2; exit 1; }
-          for platform in linux_amd64 linux_arm64 linux_armv7 linux_riscv64 darwin_amd64 darwin_arm64 freebsd_amd64 freebsd_arm64 windows_amd64 windows_arm64; do
-            extension=tar.gz
-            case "$platform" in windows_*) extension=zip ;; esac
-            [ -s "dist/oci-mirror-proxy_${RELEASE_TAG}_${platform}.${extension}" ] || { echo "Missing release archive: $platform" >&2; exit 1; }
-          done
-          (cd dist && sha256sum --check SHA256SUMS)
-          api="${SERVER_URL%/}/api/v1/repos/$REPOSITORY"
-          tag=$(printf '%s' "$RELEASE_TAG" | jq -sRr @uri)
-          status=$(curl --silent --show-error --output dist/release.json --write-out '%{http_code}' \
-            --header "Authorization: token $RELEASE_TOKEN" "$api/releases/tags/$tag")
-          case "$status" in
-            200) ;;
-            404)
-              jq -n --arg tag "$RELEASE_TAG" \
-                '{tag_name: $tag, name: $tag, body: "Linux, macOS, FreeBSD, and Windows binaries. Verify downloads with SHA256SUMS.", draft: true, prerelease: ($tag | test("-"))}' \
-                > dist/release-request.json
-              curl --fail-with-body --silent --show-error \
-                --header "Authorization: token $RELEASE_TOKEN" \
-                --header 'Content-Type: application/json' \
-                --data-binary @dist/release-request.json \
-                "$api/releases" > dist/release.json
-              ;;
-            *) echo "Could not look up release (HTTP $status)" >&2; exit 1 ;;
-          esac
-          release_id=$(jq -er '.id | numbers' dist/release.json)
-          for asset in dist/*.tar.gz dist/*.zip dist/SHA256SUMS; do
-            name=$(basename "$asset")
-            # Replace only our named assets, so rerunning a release job is safe.
-            curl --fail-with-body --silent --show-error \
-              --header "Authorization: token $RELEASE_TOKEN" \
-              "$api/releases/$release_id/assets" > dist/assets.json
-            jq -r --arg name "$name" '.[] | select(.name == $name) | .id' dist/assets.json > dist/replace-ids
-            while IFS= read -r asset_id; do
-              curl --fail-with-body --silent --show-error --request DELETE \
-                --header "Authorization: token $RELEASE_TOKEN" \
-                "$api/releases/$release_id/assets/$asset_id"
-            done < dist/replace-ids
-            curl --fail-with-body --silent --show-error \
-              --header "Authorization: token $RELEASE_TOKEN" \
-              --form "attachment=@$asset" \
-              "$api/releases/$release_id/assets?name=$name" > /dev/null
-          done
-          curl --fail-with-body --silent --show-error \
-            --header "Authorization: token $RELEASE_TOKEN" \
-            "$api/releases/$release_id/assets" > dist/assets.json
-          for asset in dist/*.tar.gz dist/*.zip dist/SHA256SUMS; do
-            name=$(basename "$asset")
-            size=$(wc -c < "$asset" | tr -d ' ')
-            jq -e --arg name "$name" --argjson size "$size" \
-              '[.[] | select(.name == $name and .size == $size)] | length == 1' dist/assets.json > /dev/null
-          done
-          curl --fail-with-body --silent --show-error --request PATCH \
-            --header "Authorization: token $RELEASE_TOKEN" \
-            --header 'Content-Type: application/json' \
-            --data '{"draft":false}' "$api/releases/$release_id" > /dev/null
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: dagger api call ci publish-release --assets=dist --provider=gitea --server="$SERVER_URL" --repository="$REPOSITORY" --tag="$RELEASE_TAG" --token=env:RELEASE_TOKEN --run-id="$RUN_ID" --progress report

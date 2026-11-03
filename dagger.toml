@@ -1,0 +1,12 @@
+[modules.dang-sdk]
+source = "github.com/dagger/dang-sdk"
+
+[sdks.dang]
+module = "dang-sdk"
+
+[modules.ci]
+source = ".dagger/modules/ci"
+
+[sdks.dang.scopes.".dagger/modules/ci"]
+is-module = true
+name = "ci"

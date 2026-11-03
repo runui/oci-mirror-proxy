@@ -24,31 +24,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+      - name: Install Dagger
+        run: sh scripts/setup-dagger.sh
 
-      - name: Validate release tag
+      - name: Test and build verified release archives
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          case "$RELEASE_TAG" in
-            v*[!a-zA-Z0-9._+-]*|'') echo 'Invalid release tag' >&2; exit 1 ;;
-            v*) ;;
-            *) echo 'Release tags must start with v' >&2; exit 1 ;;
-          esac
-
-      - name: Test
-        run: go test -count=1 ./...
-
-      - name: Build release archives
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: v2.18.3
-          args: release --clean --skip=publish
+        run: dagger api call ci release-build --tag="$RELEASE_TAG" export --path=dist --progress report -v
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -69,28 +51,23 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Dagger
+        run: sh scripts/setup-dagger.sh
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
           name: release-assets
           path: dist
-
-      - name: Publish release
+      - name: Publish verified release
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          RELEASE_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          (cd dist && sha256sum --check SHA256SUMS)
-          prerelease=false
-          case "$RELEASE_TAG" in *-*) prerelease=true ;; esac
-          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft \
-              --title "$RELEASE_TAG" --generate-notes --prerelease="$prerelease"
-          fi
-          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS --clobber
-          gh release edit "$RELEASE_TAG" --draft=false --prerelease="$prerelease"
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: dagger api call ci publish-release --assets=dist --provider=github --repository="$REPOSITORY" --tag="$RELEASE_TAG" --token=env:RELEASE_TOKEN --run-id="$RUN_ID" --progress report
 
   homebrew:
     name: Notify Homebrew tap
@@ -99,16 +76,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Dagger
+        run: sh scripts/setup-dagger.sh
       - name: Request package update
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          if [ -z "$GH_TOKEN" ]; then
-            echo 'Configure HOMEBREW_TAP_TOKEN to notify zmide/homebrew-tap.' >&2
-            exit 1
-          fi
-          jq -n --arg tag "$RELEASE_TAG" \
-            '{event_type: "update-package", client_payload: {package: "oci-mirror-proxy", tag: $tag}}' \
-            | gh api --method POST repos/zmide/homebrew-tap/dispatches --input -
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: dagger api call ci notify-homebrew --tag="$RELEASE_TAG" --token=env:HOMEBREW_TOKEN --run-id="$RUN_ID" --progress report

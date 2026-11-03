@@ -1,0 +1,187 @@
+"""
+Repository checks and build pipelines shared by local runs and CI providers.
+"""
+type Ci {
+  let goEnv(ws: Workspace!): Container! {
+    container
+      .from("golang:1.26.8-bookworm")
+      .withWorkdir("/src")
+      .withMountedCache("/go/pkg/mod", cacheVolume("oci-mirror-proxy-go-mod"))
+      .withMountedCache("/root/.cache/go-build", cacheVolume("oci-mirror-proxy-go-build"))
+      .withDirectory("/src", ws.directory(".", include: ["go.mod", "go.sum"]))
+      .withExec(["go", "mod", "download"])
+      .withDirectory("/src", ws.directory(".", include: ["go.mod", "go.sum", "Makefile", "cmd/**", "internal/**", "install.sh", "install.ps1", "examples/**", "subscriptions/**"]))
+  }
+
+  """Check Go formatting."""
+  pub format(ws: Workspace!): Void @check {
+    goEnv(ws).withExec(["make", "fmt-check"]).sync
+    null
+  }
+
+  """Run Go vet."""
+  pub vet(ws: Workspace!): Void @check {
+    goEnv(ws).withExec(["make", "vet"]).sync
+    null
+  }
+
+  """Run all Go tests without Go's test-result cache."""
+  pub test(ws: Workspace!): Void @check {
+    goEnv(ws).withExec(["make", "test"]).sync
+    null
+  }
+
+  """Run all Go tests with the race detector."""
+  pub race(ws: Workspace!): Void @check {
+    goEnv(ws).withExec(["make", "race"]).sync
+    null
+  }
+
+  """Enforce the Go dependency policy."""
+  pub dependencies(ws: Workspace!): Void @check {
+    goEnv(ws).withExec(["make", "deps-check"]).sync
+    null
+  }
+
+  """Check subscription formatting and schemas."""
+  pub subscriptions(ws: Workspace!): Void @check {
+    container
+      .from("node:22.21.1-bookworm-slim")
+      .withWorkdir("/src")
+      .withMountedCache("/root/.npm", cacheVolume("oci-mirror-proxy-npm"))
+      .withDirectory("/src", ws.directory(".", include: ["package.json", "package-lock.json"]))
+      .withExec(["npm", "ci", "--ignore-scripts"])
+      .withDirectory("/src", ws.directory(".", include: [".oxfmtrc.json", "scripts/validate-subscriptions.mjs", "subscriptions/**"]))
+      .withExec(["npm", "run", "check"])
+      .sync
+    null
+  }
+
+  """Build and validate the documentation static export."""
+  pub docs(ws: Workspace!): Directory! {
+    container
+      .from("node:24-bookworm-slim")
+      .withWorkdir("/src/apps/docs")
+      .withMountedCache("/root/.npm", cacheVolume("oci-mirror-proxy-docs-npm"))
+      .withDirectory(".", ws.directory("apps/docs", include: ["package.json", "package-lock.json"]))
+      .withExec(["npm", "ci"])
+      .withDirectory("/src", ws.directory(".", include: ["apps/docs/**", "!apps/docs/node_modules/**", "!apps/docs/.next/**", "!apps/docs/out/**", "docs/demos/**", "install.sh", "install.ps1", "subscriptions/**"]))
+      .withExec(["npm", "run", "types:check"])
+      .withExec(["npm", "test"])
+      .withExec(["npm", "run", "check:i18n"])
+      .withExec(["npm", "run", "build"])
+      .withExec(["npm", "run", "check:links"])
+      .directory("out")
+  }
+
+  """Build release archives without publication credentials."""
+  pub release(ws: Workspace!, snapshot: Boolean! = false): Directory! {
+    let args = if (snapshot) {
+      ["goreleaser", "release", "--clean", "--skip=publish", "--snapshot"]
+    } else {
+      ["goreleaser", "release", "--clean", "--skip=publish"]
+    }
+    goEnv(ws)
+      .withFile("/usr/local/bin/goreleaser", container.from("ghcr.io/goreleaser/goreleaser:v2.18.3").file("/usr/bin/goreleaser"))
+      .withDirectory("/src", ws.directory(".", include: ["**", ".git/**", "!node_modules/**", "!apps/docs/node_modules/**", "!apps/docs/.next/**", "!apps/docs/out/**", "!dist/**"]))
+      .withExec(args)
+      .directory("dist")
+  }
+
+  let releaseApi(ws: Workspace!): Container! {
+    container.from("node:22.21.1-bookworm-slim")
+      .withDirectory("/pipeline", ws.directory(".dagger/modules/ci", include: ["*.mjs"]))
+  }
+
+  """Validate the release tag before building or publishing."""
+  pub validateTag(ws: Workspace!, tag: String!): Void {
+    releaseApi(ws).withExec(["node", "/pipeline/publish.mjs", "validate", "--tag", tag]).sync
+    null
+  }
+
+  """Test release adapters, checksum policy and image tagging without credentials."""
+  pub pipelineTests(ws: Workspace!): Void @check {
+    releaseApi(ws).withWorkdir("/pipeline").withExec(["node", "--test", "publish.test.mjs"]).sync
+    null
+  }
+
+  """Validate, test, package and verify a tagged release without credentials."""
+  pub releaseBuild(ws: Workspace!, tag: String!, snapshot: Boolean! = false): Directory! {
+    validateTag(ws, tag)
+    test(ws)
+    let assets = release(ws, snapshot)
+    releaseApi(ws).withDirectory("/assets", assets)
+      .withExec(["node", "/pipeline/publish.mjs", "verify", "--tag", tag]).sync
+    assets
+  }
+
+  """Validate Compose without starting services."""
+  pub compose(ws: Workspace!): Void {
+    container.from("docker:cli")
+      .withDirectory("/src", ws.directory(".", include: ["docker-compose.yaml", "examples/**"]))
+      .withWorkdir("/src")
+      .withExec(["docker", "compose", "config", "--quiet"]).sync
+    null
+  }
+
+  """Verify and publish the same archive matrix to either release provider."""
+  pub publishRelease(ws: Workspace!, assets: Directory!, provider: String!, repository: String!, tag: String!, token: Secret!, server: String! = "https://github.com", runId: String!): Void {
+    releaseApi(ws)
+      .withDirectory("/assets", assets)
+      .withSecretVariable("API_TOKEN", token)
+      .withEnvVariable("PUBLISH_RUN_ID", runId)
+      .withExec(["node", "/pipeline/publish.mjs", "publish", "--provider", provider, "--server", server, "--repository", repository, "--tag", tag])
+      .sync
+    null
+  }
+
+  """Notify the Homebrew tap for stable releases only."""
+  pub notifyHomebrew(ws: Workspace!, tag: String!, token: Secret!, runId: String!): Void {
+    releaseApi(ws)
+      .withSecretVariable("API_TOKEN", token)
+      .withEnvVariable("PUBLISH_RUN_ID", runId)
+      .withExec(["node", "/pipeline/publish.mjs", "notify", "--tag", tag])
+      .sync
+    null
+  }
+
+  let image(ws: Workspace!, platform: Platform!, version: String!): Container! {
+    ws.directory(".", include: ["Dockerfile", "go.mod", "go.sum", "cmd/**", "internal/**"])
+      .dockerBuild(platform: platform, buildArgs: [{{name: "VERSION", value: version}}])
+  }
+
+  """Build both production image architectures without registry credentials."""
+  pub containerCheck(ws: Workspace!): Void {
+    compose(ws)
+    test(ws)
+    image(ws, "linux/amd64", "dev").sync
+    image(ws, "linux/arm64", "dev").sync
+    null
+  }
+
+  """Publish a multi-architecture production image to one explicit tag."""
+  pub publishImage(ws: Workspace!, address: String!, registry: String!, username: String!, password: Secret!, version: String! = "dev"): String! {
+    image(ws, "linux/amd64", version)
+      .withRegistryAuth(registry, username, password)
+      .publish(address, platformVariants: [image(ws, "linux/amd64", version), image(ws, "linux/arm64", version)])
+  }
+
+  """Test, build and publish the container release with optional latest alias."""
+  pub containerPublish(ws: Workspace!, server: String!, repository: String!, username: String!, password: Secret!, ref: String!): Void {
+    compose(ws)
+    test(ws)
+    let version = imageCoordinate(ws, "version", server, repository, ref)
+    let stable = imageCoordinate(ws, "stable", server, repository, ref)
+    let registry = imageCoordinate(ws, "registry", server, repository, ref)
+    let repo = imageCoordinate(ws, "repository", server, repository, ref)
+    publishImage(ws, registry + "/" + repo + ":" + version, registry, username, password, version)
+    if (stable == "true") {
+      publishImage(ws, registry + "/" + repo + ":latest", registry, username, password, version)
+    }
+    null
+  }
+
+  let imageCoordinate(ws: Workspace!, field: String!, server: String!, repository: String!, ref: String!): String! {
+    releaseApi(ws).withExec(["node", "/pipeline/image.mjs", field, server, repository, ref]).stdout
+  }
+}

@@ -1,0 +1,32 @@
+name: Dagger Checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: catthehacker/ubuntu:act-latest
+    env:
+      # The runner must mount its Docker socket into the job container.
+      DOCKER_HOST: unix:///var/run/docker.sock
+    steps:
+      - uses: https://github.com/actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check Docker
+        run: |
+          set -eu
+          if [ ! -S /var/run/docker.sock ]; then
+            echo 'Configure the runner to mount /var/run/docker.sock into job containers.' >&2
+            exit 1
+          fi
+          docker info
+      - name: Install Dagger
+        run: sh scripts/setup-dagger.sh
+      - name: Run repository checks
+        run: dagger check --progress report -v
