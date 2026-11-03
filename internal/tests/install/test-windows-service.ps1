@@ -145,6 +145,7 @@ try {
             Stop-Service -Name $serviceName
             (Get-Service -Name $serviceName).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(45))
             Start-Service -Name $serviceName
+            Wait-ProxyReady $installed $pipe
             # Startup failure during update must restore the previous binary and
             # the previous running service, without touching user configuration.
             $previous = (Get-FileHash -LiteralPath $installed).Hash

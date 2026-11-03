@@ -99,7 +99,10 @@ try {
 }
 '@
     $command = $command.Replace('__PAYLOAD__', $payload)
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    # Credentialed launches use CreateProcessWithLogonW's 1024-character limit.
+    # Keep the script in the ACL-isolated directory instead of encoding it inline.
+    $checkScript = Join-Path $WorkDirectory 'check.ps1'
+    [IO.File]::WriteAllText($checkScript, $command, [Text.Encoding]::UTF8)
     $credential = New-Object Management.Automation.PSCredential("$env:COMPUTERNAME\$name", $password)
     $stdout = Join-Path $WorkDirectory 'check-stdout.log'
     $stderr = Join-Path $WorkDirectory 'check-stderr.log'
@@ -108,7 +111,7 @@ try {
     $modulePath = $env:PSModulePath
     try {
         $env:PSModulePath = "$env:ProgramFiles\WindowsPowerShell\Modules;$env:SystemRoot\System32\WindowsPowerShell\v1.0\Modules"
-        $process = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoLogo','-NoProfile','-EncodedCommand',$encoded) -Credential $credential -LoadUserProfile -WorkingDirectory $WorkDirectory -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+        $process = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f $checkScript)) -Credential $credential -LoadUserProfile -WorkingDirectory $WorkDirectory -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
     } finally { $env:PSModulePath = $modulePath }
     try {
         if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $WorkDirectory 'passed'))) {
@@ -121,6 +124,19 @@ try {
             throw "Standard-user permission check failed (exit $($process.ExitCode))."
         }
     } finally { $process.Dispose() }
+} catch {
+    # Preserve child output before the isolated work directory is removed.
+    try {
+        if ($workCreated -and $env:WINDOWS_SERVICE_DIAGNOSTICS) {
+            $diagnostics = Join-Path $env:WINDOWS_SERVICE_DIAGNOSTICS $name
+            New-Item -ItemType Directory -Path $diagnostics -Force | Out-Null
+            $_ | Out-String | Set-Content -LiteralPath (Join-Path $diagnostics 'failure.txt')
+            Get-ChildItem -LiteralPath $WorkDirectory -Filter '*.log' -File | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination $diagnostics -Force
+            }
+        }
+    } catch { Write-Warning "Could not collect standard-user diagnostics: $_" }
+    throw
 } finally {
     try {
         if ($user) {

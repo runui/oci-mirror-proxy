@@ -67,7 +67,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
           RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: dagger api call ci publish-release --assets=dist --provider=github --repository="$REPOSITORY" --tag="$RELEASE_TAG" --token=env:RELEASE_TOKEN --run-id="$RUN_ID" --progress report
+        run: dagger api call ci publish-release --assets=dist --provider=github --repository="$REPOSITORY" --tag="$RELEASE_TAG" --token=env://RELEASE_TOKEN --run-id="$RUN_ID" --progress report
 
   homebrew:
     name: Notify Homebrew tap
@@ -86,4 +86,4 @@ jobs:
           HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
           RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: dagger api call ci notify-homebrew --tag="$RELEASE_TAG" --token=env:HOMEBREW_TOKEN --run-id="$RUN_ID" --progress report
+        run: dagger api call ci notify-homebrew --tag="$RELEASE_TAG" --token=env://HOMEBREW_TOKEN --run-id="$RUN_ID" --progress report

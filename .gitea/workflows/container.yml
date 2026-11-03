@@ -33,4 +33,4 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
           REF: ${{ github.ref }}
-        run: dagger api call ci container-publish --server="$SERVER_URL" --repository="$REPOSITORY" --ref="$REF" --username="$REGISTRY_USERNAME" --password=env:REGISTRY_PASSWORD --progress report -v
+        run: dagger api call ci container-publish --server="$SERVER_URL" --repository="$REPOSITORY" --ref="$REF" --username="$REGISTRY_USERNAME" --password=env://REGISTRY_PASSWORD --progress report -v

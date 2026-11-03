@@ -11,6 +11,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/windows.yml'
+      - 'scripts/windows-ci.test.mjs'
   pull_request:
     paths:
       - 'install.ps1'
@@ -20,6 +21,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/windows.yml'
+      - 'scripts/windows-ci.test.mjs'
 
 permissions:
   contents: read
@@ -36,6 +38,27 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check Windows CI launch and diagnostic configuration
+        run: node --test scripts/windows-ci.test.mjs
+      - name: Parse PowerShell installer and integration scripts
+        shell: pwsh
+        run: |
+          foreach ($file in @('install.ps1', 'internal/tests/install/test-windows-service.ps1', 'internal/tests/install/test-windows-user.ps1')) {
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $env:GITHUB_WORKSPACE $file), [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
+            foreach ($assignment in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$command' }, $true)) {
+              $command = $assignment.Right.Expression.Value
+              if ($command) {
+                $null = [System.Management.Automation.Language.Parser]::ParseInput($command, [ref]$tokens, [ref]$parseErrors)
+                if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
+              }
+            }
+          }
       - name: Vet
         run: go vet ./...
       - name: Test (including PowerShell installers)
@@ -53,14 +76,27 @@ jobs:
         env:
           WINDOWS_SERVICE_DIAGNOSTICS: ${{ runner.temp }}/windows-service-diagnostics
         run: ./internal/tests/install/test-windows-service.ps1
+      - name: Collect Windows service diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:GITHUB_WORKSPACE 'windows-service-diagnostics'
+          New-Item -ItemType Directory -Path $destination -Force | Out-Null
+          $sources = @{
+            service = Join-Path $env:RUNNER_TEMP 'windows-service-diagnostics'
+            installer = 'C:/ProgramData/oci-mirror-proxy-installer'
+          }
+          foreach ($entry in $sources.GetEnumerator()) {
+            if (Test-Path -LiteralPath $entry.Value) {
+              Copy-Item -LiteralPath $entry.Value -Destination (Join-Path $destination $entry.Key) -Recurse -Force
+            }
+          }
       - name: Upload Windows service diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: windows-service-diagnostics
-          path: |
-            ${{ runner.temp }}/windows-service-diagnostics
-            C:/ProgramData/oci-mirror-proxy-installer
+          path: windows-service-diagnostics
           if-no-files-found: ignore
       - name: Build amd64 and arm64
         shell: pwsh
