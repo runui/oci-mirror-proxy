@@ -83,7 +83,7 @@ type Ci {
     }
     goEnv(ws)
       .withFile("/usr/local/bin/goreleaser", container.from("ghcr.io/goreleaser/goreleaser:v2.18.3").file("/usr/bin/goreleaser"))
-      .withDirectory("/src", ws.directory(".", include: ["**", ".git/**", "!node_modules/**", "!apps/docs/node_modules/**", "!apps/docs/.next/**", "!apps/docs/out/**", "!dist/**"]))
+      .withDirectory("/src", ws.directory(".", include: ["**", "dagger.lock", ".git/**", "!node_modules/**", "!apps/docs/node_modules/**", "!apps/docs/.next/**", "!apps/docs/out/**", "!dist/**"]))
       .withExec(args)
       .directory("dist")
   }
@@ -102,7 +102,7 @@ type Ci {
   """Test release adapters, checksum policy and image tagging without credentials."""
   pub pipelineTests(ws: Workspace!): Void @check {
     releaseApi(ws)
-      .withDirectory("/src", ws.directory(".", include: ["scripts/setup-dagger.sh", "scripts/setup-dagger.test.mjs", ".gitea/workflows/**", ".github/workflows/**"]))
+      .withDirectory("/src", ws.directory(".", include: ["scripts/setup-dagger.sh", "scripts/setup-dagger.test.mjs", ".dagger/modules/ci/main.dang", ".gitea/workflows/**", ".github/workflows/**"]))
       .withWorkdir("/src")
       .withExec(["node", "--test", "/pipeline/publish.test.mjs", "scripts/setup-dagger.test.mjs"]).sync
     null

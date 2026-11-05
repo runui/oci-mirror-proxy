@@ -56,3 +56,9 @@ test('Dagger workflow secrets use provider URLs', async () => {
   }
   assert.equal(secrets, 4);
 });
+
+test('release imports the tracked lockfile without disabling Git validation', async () => {
+  const pipeline = await readFile('.dagger/modules/ci/main.dang', 'utf8');
+  assert.match(pipeline, /include: \["\*\*", "dagger\.lock", "\.git\/\*\*"/);
+  assert.ok(!pipeline.includes('--skip=validate'));
+});
