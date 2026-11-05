@@ -15,6 +15,36 @@
 	},
 	"mirrors": [
 		{
+			"name": "Docker Hub Official Registry",
+			"website": "https://docs.docker.com/docker-hub/",
+			"regions": ["global", "apac", "eu", "na", "de", "us", "sg", "jp"],
+			"endpoints": [{ "registry": "docker.io", "url": "https://registry-1.docker.io" }]
+		},
+		{
+			"name": "GitHub Official Container Registry",
+			"website": "https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry",
+			"regions": ["global", "apac", "eu", "na", "de", "us", "sg", "jp"],
+			"endpoints": [{ "registry": "ghcr.io", "url": "https://ghcr.io" }]
+		},
+		{
+			"name": "Google Official Registry (gcr.io)",
+			"website": "https://docs.cloud.google.com/artifact-registry/docs/transition/gcr-repositories",
+			"regions": ["global", "apac", "eu", "na", "de", "us", "sg", "jp"],
+			"endpoints": [{ "registry": "gcr.io", "url": "https://gcr.io" }]
+		},
+		{
+			"name": "Kubernetes Official Image Registry",
+			"website": "https://kubernetes.io/blog/2022/11/28/registry-k8s-io-faster-cheaper-ga/",
+			"regions": ["global", "apac", "eu", "na", "de", "us", "sg", "jp"],
+			"endpoints": [{ "registry": "registry.k8s.io", "url": "https://registry.k8s.io" }]
+		},
+		{
+			"name": "Quay.io Official Registry",
+			"website": "https://docs.quay.io/guides/pushpull.html",
+			"regions": ["global", "apac", "eu", "na", "de", "us", "sg", "jp"],
+			"endpoints": [{ "registry": "quay.io", "url": "https://quay.io" }]
+		},
+		{
 			"name": "DaoCloud Public Image Mirror",
 			"website": "https://github.com/DaoCloud/public-image-mirror",
 			"regions": ["global", "cn", "apac", "eu", "na"],
