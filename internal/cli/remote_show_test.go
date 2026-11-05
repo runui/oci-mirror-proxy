@@ -111,8 +111,8 @@ func TestRemoteShowFlags(t *testing.T) {
 		t.Error("help fetched the catalog")
 	}))
 	defer server.Close()
-	code, _, stderr := run(t, "remote", "show", "--url", server.URL, "--help")
-	if code != 0 || !strings.Contains(stderr, "-region") || !strings.Contains(stderr, "-url") || strings.Contains(stderr, "-config") {
+	code, help, stderr := run(t, "remote", "show", "--url", server.URL, "--help")
+	if code != 0 || stderr != "" || !strings.Contains(help, "-region") || !strings.Contains(help, "-url") || strings.Contains(help, "-config") {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
 	for _, raw := range []string{"", defaultRemoteURL} {
@@ -199,7 +199,10 @@ func TestRemoteShowCanceled(t *testing.T) {
 		t.Error("canceled request reached server")
 	}))
 	defer server.Close()
-	if err := cmdRemoteShow(ctx, []string{"--url", server.URL}, io.Discard, io.Discard); !errors.Is(err, context.Canceled) {
+	cmd := newRemoteShowCommand(ctx, io.Discard, io.Discard)
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--url", server.URL})
+	if err := cmd.Execute(); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation, got %v", err)
 	}
 }

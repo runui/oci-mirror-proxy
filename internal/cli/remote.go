@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,33 +14,12 @@ import (
 	"time"
 
 	"github.com/runui/oci-mirror-proxy/internal/config"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 const defaultRemoteURL = "https://ocimp.zmide.com/subscriptions/mirrors.json"
 const maxCatalogSize = 4 << 20
-
-func parseRemoteFlags(fs *flag.FlagSet, args []string) error {
-	args = append([]string(nil), args...)
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" || !strings.HasPrefix(arg, "-") || arg == "-" {
-			break
-		}
-		name, _, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
-		if name == "region" && fs.Lookup("regions") != nil {
-			args[i] = strings.Replace(arg, "region", "regions", 1)
-			name = "regions"
-		}
-		f := fs.Lookup(name)
-		if f == nil || hasValue {
-			continue
-		}
-		if b, ok := f.Value.(interface{ IsBoolFlag() bool }); !ok || !b.IsBoolFlag() {
-			i++
-		}
-	}
-	return parseFlags(fs, args)
-}
 
 func fetchCatalog(ctx context.Context, raw string) (remoteCatalog, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -85,19 +63,9 @@ func fetchCatalog(ctx context.Context, raw string) (remoteCatalog, error) {
 	return decodeCatalog(data)
 }
 
-func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		return fmt.Errorf("%w: want remote list, show, update or remove", errUsage)
-	}
-	action := args[0]
-	// Inspect catalogs before resolving configuration: show needs no local files.
-	if action == "show" {
-		return cmdRemoteShow(ctx, args[1:], stdout, stderr)
-	}
-	if action != "list" && action != "update" && action != "remove" {
-		return fmt.Errorf("%w: unknown remote action %q", errUsage, action)
-	}
-	fs := newFlagSet("remote "+action, stderr)
+func newRemoteAction(ctx context.Context, action string, stdout, stderr io.Writer) *cobra.Command {
+	cmd := leafCommand(action, remoteDescriptions[action])
+	fs := cmd.Flags()
 	configFlag := fs.String("config", "", "deprecated compatibility flag; ignored")
 	socket := fs.String("admin-socket", "", "explicit admin endpoint")
 	var raw, region *string
@@ -112,133 +80,133 @@ func cmdRemote(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		all = fs.Bool("all", false, "update every configured remote")
 		allowEmpty = fs.Bool("allow-empty", false, "allow an empty selected mirror list")
 	}
-	if err := parseRemoteFlags(fs, args[1:]); err != nil {
-		return err
-	}
-	_ = configFlag
-	regionsSet := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "regions" {
-			regionsSet = true
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		_ = configFlag
+		regionsSet := false
+		fs.Visit(func(f *pflag.Flag) {
+			if f.Name == "regions" {
+				regionsSet = true
+			}
+		})
+		client, err := adminClient(*socket, "")
+		if err != nil {
+			return err
 		}
-	})
-	client, err := adminClient(*socket, "")
-	if err != nil {
-		return err
-	}
-	if action == "list" {
-		files, scanErr := scanRemoteClient(client)
-		tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "URL\tREGIONS\tUPSTREAMS\tFILE")
-		for _, f := range files {
-			count := 0
-			d, e := config.ParseDocument(f.path, f.data)
-			if e == nil {
-				var c config.Config
-				e = d.Root.Decode(&c)
+		if action == "list" {
+			files, scanErr := scanRemoteClient(client)
+			tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "URL\tREGIONS\tUPSTREAMS\tFILE")
+			for _, f := range files {
+				count := 0
+				d, e := config.ParseDocument(f.path, f.data)
 				if e == nil {
-					for _, r := range c.Registries {
-						count += len(r.Upstreams)
+					var c config.Config
+					e = d.Root.Decode(&c)
+					if e == nil {
+						for _, r := range c.Registries {
+							count += len(r.Upstreams)
+						}
 					}
 				}
+				if e != nil {
+					scanErr = errors.Join(scanErr, e)
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", displayRemoteURL(f.meta.URL), strings.Join(f.meta.Regions, ","), count, f.path)
 			}
-			if e != nil {
-				scanErr = errors.Join(scanErr, e)
+			if err := tw.Flush(); err != nil {
+				return err
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", displayRemoteURL(f.meta.URL), strings.Join(f.meta.Regions, ","), count, f.path)
+			return scanErr
 		}
-		if err := tw.Flush(); err != nil {
-			return err
+		if action == "remove" && *raw == "" {
+			return fmt.Errorf("%w: remote remove requires --url", errUsage)
 		}
-		return scanErr
-	}
-	if action == "remove" && *raw == "" {
-		return fmt.Errorf("%w: remote remove requires --url", errUsage)
-	}
-	var urls []string
-	savedRegions := map[string][]string{}
-	if action == "update" && *all {
-		if *raw != "" || regionsSet {
-			return fmt.Errorf("%w: --all cannot be combined with --url or --regions", errUsage)
-		}
-		files, err := scanRemoteClient(client)
-		if err != nil {
-			return err
-		}
-		for _, f := range files {
-			urls = append(urls, f.meta.URL)
-			savedRegions[f.meta.URL] = f.meta.Regions
-		}
-	} else {
-		u := *raw
-		if u == "" {
-			u = defaultRemoteURL
-		}
-		canonical, err := config.NormalizeURL(u)
-		if err != nil {
-			return err
-		}
-		urls = []string{canonical}
-	}
-	var regions []string
-	if region != nil && *region != "" {
-		regions, err = cleanRegions(*region)
-		if err != nil {
-			return fmt.Errorf("%w: %w", errUsage, err)
-		}
-	}
-	if len(urls) == 0 {
-		fmt.Fprintln(stdout, "no configured remotes")
-		return nil
-	}
-
-	var errs []error
-	changed := false
-	succeeded := 0
-	for _, u := range urls {
-		if strings.HasPrefix(u, "http:") {
-			fmt.Fprintf(stderr, "warning: unencrypted remote %s\n", displayRemoteURL(u))
-		}
-		var catalog remoteCatalog
-		if action == "update" {
-			catalog, err = fetchCatalog(ctx, u)
+		var urls []string
+		savedRegions := map[string][]string{}
+		if action == "update" && *all {
+			if *raw != "" || regionsSet {
+				return fmt.Errorf("%w: --all cannot be combined with --url or --regions", errUsage)
+			}
+			files, err := scanRemoteClient(client)
 			if err != nil {
-				errs = append(errs, fmt.Errorf("%s: %w", displayRemoteURL(u), err))
+				return err
+			}
+			for _, f := range files {
+				urls = append(urls, f.meta.URL)
+				savedRegions[f.meta.URL] = f.meta.Regions
+			}
+		} else {
+			u := *raw
+			if u == "" {
+				u = defaultRemoteURL
+			}
+			canonical, err := config.NormalizeURL(u)
+			if err != nil {
+				return err
+			}
+			urls = []string{canonical}
+		}
+		var regions []string
+		if region != nil && *region != "" {
+			regions, err = cleanRegions(*region)
+			if err != nil {
+				return fmt.Errorf("%w: %w", errUsage, err)
+			}
+		}
+		if len(urls) == 0 {
+			fmt.Fprintln(stdout, "no configured remotes")
+			return nil
+		}
+
+		var errs []error
+		changed := false
+		succeeded := 0
+		for _, u := range urls {
+			if strings.HasPrefix(u, "http:") {
+				fmt.Fprintf(stderr, "warning: unencrypted remote %s\n", displayRemoteURL(u))
+			}
+			var catalog remoteCatalog
+			if action == "update" {
+				catalog, err = fetchCatalog(ctx, u)
+				if err != nil {
+					errs = append(errs, fmt.Errorf("%s: %w", displayRemoteURL(u), err))
+					continue
+				}
+			}
+			selection := regions
+			if all != nil && *all {
+				selection = savedRegions[u]
+				if len(selection) == 0 {
+					selection = []string{"global"}
+				}
+			}
+			mutated, e := editRemoteClient(client, u, selection, catalog, action, *dry, allowEmpty != nil && *allowEmpty, stdout)
+			// Successful writes are reloaded together after processing all sources.
+			changed = changed || mutated
+			if e != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", displayRemoteURL(u), e))
 				continue
 			}
+			succeeded++
 		}
-		selection := regions
-		if all != nil && *all {
-			selection = savedRegions[u]
-			if len(selection) == 0 {
-				selection = []string{"global"}
+		// An unchanged retry still reloads: the previous write may have succeeded
+		// while its reload failed. Idempotence must not trap the service on old data.
+		if (changed || succeeded > 0) && !*dry {
+			if *noReload {
+				fmt.Fprintln(stdout, "configuration saved; reload skipped")
+			} else {
+				e := client.Reload()
+				switch {
+				case e == nil:
+					fmt.Fprintln(stdout, "configuration reloaded")
+				case errors.Is(e, os.ErrNotExist) || errors.Is(e, syscall.ECONNREFUSED):
+					errs = append(errs, fmt.Errorf("files saved, but proxy disconnected before reload: %w", e))
+				default:
+					errs = append(errs, fmt.Errorf("files saved, but running configuration is not confirmed: %w", e))
+				}
 			}
 		}
-		mutated, e := editRemoteClient(client, u, selection, catalog, action, *dry, allowEmpty != nil && *allowEmpty, stdout)
-		// Successful writes are reloaded together after processing all sources.
-		changed = changed || mutated
-		if e != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", displayRemoteURL(u), e))
-			continue
-		}
-		succeeded++
+		return errors.Join(errs...)
 	}
-	// An unchanged retry still reloads: the previous write may have succeeded
-	// while its reload failed. Idempotence must not trap the service on old data.
-	if (changed || succeeded > 0) && !*dry {
-		if *noReload {
-			fmt.Fprintln(stdout, "configuration saved; reload skipped")
-		} else {
-			e := client.Reload()
-			switch {
-			case e == nil:
-				fmt.Fprintln(stdout, "configuration reloaded")
-			case errors.Is(e, os.ErrNotExist) || errors.Is(e, syscall.ECONNREFUSED):
-				errs = append(errs, fmt.Errorf("files saved, but proxy disconnected before reload: %w", e))
-			default:
-				errs = append(errs, fmt.Errorf("files saved, but running configuration is not confirmed: %w", e))
-			}
-		}
-	}
-	return errors.Join(errs...)
+	return cmd
 }

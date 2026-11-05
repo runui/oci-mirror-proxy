@@ -7,62 +7,64 @@ import (
 	"io"
 
 	"github.com/runui/oci-mirror-proxy/internal/daemonconf"
+	"github.com/spf13/cobra"
 )
 
-// cmdDoctor runs read-only checks and fails when any of them does.
-func cmdDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	fs := newFlagSet("doctor", stderr)
+// newDoctorCommand constructs a command that runs read-only checks and fails when any of them does.
+func newDoctorCommand(ctx context.Context, stdout, stderr io.Writer) *cobra.Command {
+	cmd := leafCommand("doctor", "Check the proxy and Docker integration")
+	fs := cmd.Flags()
 	var flags dockerFlags
 	flags.register(fs, false)
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-	paths, err := flags.resolve(ctx)
-	if err != nil {
-		return err
-	}
-	if err := flags.adapter.Validate(ctx); err != nil {
-		return err
-	}
-	target, err := flags.serverTarget()
-	if err != nil {
-		return err
-	}
-
-	info, infoErr := daemonconf.FetchInfo(ctx, paths.DockerSocket)
-	var expected []daemonconf.File
-	mirrorSettings := false
-	if _, err := storeForDoctor(flags.store, info, infoErr); err == nil {
-		plan, err := flags.adapter.Render(ctx, target, flags.store)
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		paths, err := flags.resolve(ctx)
 		if err != nil {
-			return fmt.Errorf("inspect Docker configuration: %w", err)
+			return err
 		}
-		expected = plan.Files
-		mirrorSettings = plan.Store == daemonconf.StoreDesktop
-		printWarnings(stderr, plan)
-	}
+		if err := flags.adapter.Validate(ctx); err != nil {
+			return err
+		}
+		target, err := flags.serverTarget()
+		if err != nil {
+			return err
+		}
 
-	checks := daemonconf.Diagnose(ctx, daemonconf.DiagnoseInput{
-		ProxyURL:       target.ProxyURL,
-		Info:           info,
-		InfoErr:        infoErr,
-		Expected:       expected,
-		MirrorSettings: mirrorSettings,
-	})
-	failed := 0
-	for _, c := range checks {
-		mark := "ok  "
-		if !c.OK {
-			mark = "FAIL"
-			failed++
+		info, infoErr := daemonconf.FetchInfo(ctx, paths.DockerSocket)
+		var expected []daemonconf.File
+		mirrorSettings := false
+		if _, err := storeForDoctor(flags.store, info, infoErr); err == nil {
+			plan, err := flags.adapter.Render(ctx, target, flags.store)
+			if err != nil {
+				return fmt.Errorf("inspect Docker configuration: %w", err)
+			}
+			expected = plan.Files
+			mirrorSettings = plan.Store == daemonconf.StoreDesktop
+			printWarnings(stderr, plan)
 		}
-		fmt.Fprintf(stdout, "[%s] %s: %s\n", mark, c.Name, c.Detail)
+
+		checks := daemonconf.Diagnose(ctx, daemonconf.DiagnoseInput{
+			ProxyURL:       target.ProxyURL,
+			Info:           info,
+			InfoErr:        infoErr,
+			Expected:       expected,
+			MirrorSettings: mirrorSettings,
+		})
+		failed := 0
+		for _, c := range checks {
+			mark := "ok  "
+			if !c.OK {
+				mark = "FAIL"
+				failed++
+			}
+			fmt.Fprintf(stdout, "[%s] %s: %s\n", mark, c.Name, c.Detail)
+		}
+		if failed > 0 {
+			return fmt.Errorf("%d check(s) failed", failed)
+		}
+		fmt.Fprintln(stdout, "all checks passed")
+		return nil
 	}
-	if failed > 0 {
-		return fmt.Errorf("%d check(s) failed", failed)
-	}
-	fmt.Fprintln(stdout, "all checks passed")
-	return nil
+	return cmd
 }
 
 // storeForDoctor picks the store to verify against: the detected one when dockerd

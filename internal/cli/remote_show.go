@@ -11,38 +11,40 @@ import (
 	"text/tabwriter"
 
 	"github.com/runui/oci-mirror-proxy/internal/config"
+	"github.com/spf13/cobra"
 )
 
-func cmdRemoteShow(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	fs := newFlagSet("remote show", stderr)
+func newRemoteShowCommand(ctx context.Context, stdout, stderr io.Writer) *cobra.Command {
+	cmd := leafCommand("show", "Inspect a remote mirror catalog")
+	fs := cmd.Flags()
 	raw := fs.String("url", defaultRemoteURL, "remote JSON URL (defaults to the repository catalog)")
 	region := fs.String("regions", "", "comma-separated regions (empty shows all sites)")
-	if err := parseRemoteFlags(fs, args); err != nil {
-		return err
-	}
-	u, err := remoteShowURL(*raw)
-	if err != nil {
-		return err
-	}
-	var regions []string
-	if *region != "" {
-		regions, err = cleanRegions(*region)
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		u, err := remoteShowURL(*raw)
 		if err != nil {
-			return fmt.Errorf("%w: %w", errUsage, err)
+			return err
 		}
+		var regions []string
+		if *region != "" {
+			regions, err = cleanRegions(*region)
+			if err != nil {
+				return fmt.Errorf("%w: %w", errUsage, err)
+			}
+		}
+		if strings.HasPrefix(u, "http:") {
+			fmt.Fprintf(stderr, "warning: unencrypted remote %s\n", displayRemoteURL(u))
+		}
+		catalog, err := fetchCatalog(ctx, u)
+		if err != nil {
+			return fmt.Errorf("%s: %w", displayRemoteURL(u), err)
+		}
+		mirrors, err := selectCatalogMirrors(catalog, regions)
+		if err != nil {
+			return err
+		}
+		return printCatalogMirrors(stdout, mirrors)
 	}
-	if strings.HasPrefix(u, "http:") {
-		fmt.Fprintf(stderr, "warning: unencrypted remote %s\n", displayRemoteURL(u))
-	}
-	catalog, err := fetchCatalog(ctx, u)
-	if err != nil {
-		return fmt.Errorf("%s: %w", displayRemoteURL(u), err)
-	}
-	mirrors, err := selectCatalogMirrors(catalog, regions)
-	if err != nil {
-		return err
-	}
-	return printCatalogMirrors(stdout, mirrors)
+	return cmd
 }
 
 func remoteShowURL(raw string) (string, error) {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -20,6 +19,8 @@ import (
 	"github.com/runui/oci-mirror-proxy/internal/dockerintegration/autodetect"
 	linuxintegration "github.com/runui/oci-mirror-proxy/internal/dockerintegration/linux"
 	"github.com/runui/oci-mirror-proxy/internal/userdir"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // dockerPaths are the locations that the dockerd integration reads and writes.
@@ -52,7 +53,7 @@ type dockerFlags struct {
 	verify      bool
 }
 
-func (f *dockerFlags) register(fs *flag.FlagSet, withApplyFlags bool) {
+func (f *dockerFlags) register(fs *pflag.FlagSet, withApplyFlags bool) {
 	fs.StringVar(&f.configPath, "config", "", "deprecated compatibility flag; ignored")
 	fs.StringVar(&f.adminSocket, "admin-socket", "", "explicit admin endpoint")
 	fs.StringVar(&f.serverInfo, "server-info", "", "read server info --json output from FILE instead of private service configuration")
@@ -85,88 +86,80 @@ func (f *dockerFlags) resolve(ctx context.Context) (dockerPaths, error) {
 	return adapter.Paths(), nil
 }
 
-// cmdDockerd dispatches plan, apply and revert.
-func cmdDockerd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		return fmt.Errorf("%w: want one of plan, apply, revert", errUsage)
-	}
-	action, rest := args[0], args[1:]
-	fs := newFlagSet("dockerd "+action, stderr)
+// newDockerdAction constructs plan, apply or revert without resolving local paths.
+func newDockerdAction(ctx context.Context, action string, stdout, stderr io.Writer) *cobra.Command {
+	cmd := leafCommand(action, dockerdDescriptions[action])
+	fs := cmd.Flags()
 	var flags dockerFlags
-	switch action {
-	case "plan", "apply", "revert":
-		flags.register(fs, action != "plan")
-	default:
-		return fmt.Errorf("%w: unknown dockerd action %q", errUsage, action)
-	}
-	if err := parseFlags(fs, rest); err != nil {
-		return err
-	}
-	paths, err := flags.resolve(ctx)
-	if err != nil {
-		return err
-	}
-	if err := flags.adapter.Validate(ctx); err != nil {
-		return err
-	}
-	if flags.restart && flags.noReload {
-		return fmt.Errorf("--restart and --no-reload cannot be combined")
-	}
-	flags.remove = action == "revert"
+	flags.register(fs, action != "plan")
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		paths, err := flags.resolve(ctx)
+		if err != nil {
+			return err
+		}
+		if err := flags.adapter.Validate(ctx); err != nil {
+			return err
+		}
+		if flags.restart && flags.noReload {
+			return fmt.Errorf("--restart and --no-reload cannot be combined")
+		}
+		flags.remove = action == "revert"
 
-	switch action {
-	case "plan":
-		plan, err := buildPlan(ctx, &flags, paths)
-		if err != nil {
-			return err
-		}
-		printPlan(stdout, plan)
-		printWarnings(stderr, plan)
-		return nil
+		switch action {
+		case "plan":
+			plan, err := buildPlan(ctx, &flags, paths)
+			if err != nil {
+				return err
+			}
+			printPlan(stdout, plan)
+			printWarnings(stderr, plan)
+			return nil
 
-	case "apply", "revert":
-		dir, err := userdir.Dir()
-		if err != nil {
-			return err
-		}
-		applier := daemonconf.Applier{BackupDir: filepath.Join(dir, "backups")}
-		plan, err := buildPlan(ctx, &flags, paths)
-		if err != nil {
-			return err
-		}
-		printWarnings(stderr, plan)
-		result, err := applier.Apply(plan)
-		for _, backup := range result.Backups {
-			fmt.Fprintln(stdout, "Backup:", backup)
-		}
-		if err != nil {
-			for _, f := range result.Files {
-				fmt.Fprintln(stderr, "configuration already changed:", f.Path)
+		case "apply", "revert":
+			dir, err := userdir.Dir()
+			if err != nil {
+				return err
 			}
-			return err
-		}
-		if len(result.Files) == 0 {
-			fmt.Fprintln(stdout, "Configuration files already match; no files changed.")
-			for _, note := range plan.Notes {
-				fmt.Fprintln(stdout, "note:", note)
+			applier := daemonconf.Applier{BackupDir: filepath.Join(dir, "backups")}
+			plan, err := buildPlan(ctx, &flags, paths)
+			if err != nil {
+				return err
 			}
-		} else {
-			fmt.Fprintf(stdout, "%s: changed %d file(s) using %s integration\n", action, len(result.Files), plan.Store)
-			for _, note := range plan.Notes {
-				fmt.Fprintln(stdout, "note:", note)
+			printWarnings(stderr, plan)
+			result, err := applier.Apply(plan)
+			for _, backup := range result.Backups {
+				fmt.Fprintln(stdout, "Backup:", backup)
 			}
-		}
-		// Matching files do not prove the Engine loaded them. In particular,
-		// apply followed by apply --restart must still activate Desktop settings.
-		if err := activateIntegration(ctx, stdout, result.NeedsReload, &flags); err != nil {
-			return err
-		}
-		if flags.verify {
-			return verifyIntegration(ctx, stdout, plan, &flags)
+			if err != nil {
+				for _, f := range result.Files {
+					fmt.Fprintln(stderr, "configuration already changed:", f.Path)
+				}
+				return err
+			}
+			if len(result.Files) == 0 {
+				fmt.Fprintln(stdout, "Configuration files already match; no files changed.")
+				for _, note := range plan.Notes {
+					fmt.Fprintln(stdout, "note:", note)
+				}
+			} else {
+				fmt.Fprintf(stdout, "%s: changed %d file(s) using %s integration\n", action, len(result.Files), plan.Store)
+				for _, note := range plan.Notes {
+					fmt.Fprintln(stdout, "note:", note)
+				}
+			}
+			// Matching files do not prove the Engine loaded them. In particular,
+			// apply followed by apply --restart must still activate Desktop settings.
+			if err := activateIntegration(ctx, stdout, result.NeedsReload, &flags); err != nil {
+				return err
+			}
+			if flags.verify {
+				return verifyIntegration(ctx, stdout, plan, &flags)
+			}
+			return nil
 		}
 		return nil
 	}
-	return nil
+	return cmd
 }
 
 // buildPlan reads the proxy configuration and renders the files for the image store.

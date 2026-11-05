@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,20 +33,26 @@ func TestRemoteRegionFlags(t *testing.T) {
 		{"--regions=cn,eu"},
 		{"--region", "cn", "--regions", "cn,eu"},
 	} {
-		fs := flag.NewFlagSet("remote", flag.ContinueOnError)
+		cmd := leafCommand("show", "test")
+		group := commandGroup("remote", "test")
+		group.AddCommand(cmd)
+		fs := cmd.Flags()
 		regions := fs.String("regions", "global", "comma-separated regions")
-		if err := parseRemoteFlags(fs, args); err != nil || *regions != "cn,eu" {
+		if err := fs.Parse(legacyFlags(cmd, args)); err != nil || *regions != "cn,eu" {
 			t.Fatalf("%v: regions=%q, error=%v", args, *regions, err)
 		}
 	}
-	fs := flag.NewFlagSet("remote", flag.ContinueOnError)
+	cmd := leafCommand("show", "test")
+	group := commandGroup("remote", "test")
+	group.AddCommand(cmd)
+	fs := cmd.Flags()
 	regions := fs.String("regions", "global", "comma-separated regions")
 	url := fs.String("url", "", "catalog URL")
-	if err := parseRemoteFlags(fs, []string{"--url", "--region"}); err != nil || *url != "--region" || *regions != "global" {
+	if err := fs.Parse(legacyFlags(cmd, []string{"--url", "--region"})); err != nil || *url != "--region" || *regions != "global" {
 		t.Fatalf("changed flag value: url=%q, regions=%q, error=%v", *url, *regions, err)
 	}
 	for _, action := range []string{"update", "show"} {
-		_, _, help := run(t, "remote", action, "--help")
+		_, help, _ := run(t, "remote", action, "--help")
 		if !strings.Contains(help, "-regions ") || strings.Contains(help, "-region ") {
 			t.Fatalf("unexpected help: %s", help)
 		}

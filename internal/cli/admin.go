@@ -8,81 +8,80 @@ import (
 	"github.com/runui/oci-mirror-proxy/internal/admin"
 	"github.com/runui/oci-mirror-proxy/internal/config"
 	"github.com/runui/oci-mirror-proxy/internal/ociapi"
+	"github.com/spf13/cobra"
 )
 
-// cmdStatus prints the health of every upstream of a running proxy.
-func cmdStatus(args []string, stdout, stderr io.Writer) error {
-	fs := newFlagSet("status", stderr)
+// newStatusCommand constructs a command that prints the health of every upstream of a running proxy.
+func newStatusCommand(stdout, stderr io.Writer) *cobra.Command {
+	cmd := leafCommand("status", "Show upstream health")
+	fs := cmd.Flags()
 	configPath := fs.String("config", "", "deprecated compatibility flag; ignored")
 	socketFlag := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-	socket, err := resolveAdminSocket(*socketFlag, *configPath)
-	if err != nil {
-		return err
-	}
-	st, err := admin.NewClient(socket).Status()
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "listen: %s\n\n", st.Listen)
-	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "REGISTRY\tUPSTREAM\tSTATE\tBREAKER\tREQUESTS\tFAILURES\tLAST LATENCY")
-	for _, reg := range st.Registries {
-		for _, up := range reg.Upstreams {
-			state := "enabled"
-			if up.Disabled {
-				state = "disabled"
-			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
-				reg.Alias, up.URL, state, up.Breaker, up.Requests, up.Failures, up.LastLatency)
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		socket, err := resolveAdminSocket(*socketFlag, *configPath)
+		if err != nil {
+			return err
 		}
+		st, err := admin.NewClient(socket).Status()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "listen: %s\n\n", st.Listen)
+		tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "REGISTRY\tUPSTREAM\tSTATE\tBREAKER\tREQUESTS\tFAILURES\tLAST LATENCY")
+		for _, reg := range st.Registries {
+			for _, up := range reg.Upstreams {
+				state := "enabled"
+				if up.Disabled {
+					state = "disabled"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+					reg.Alias, up.URL, state, up.Breaker, up.Requests, up.Failures, up.LastLatency)
+			}
+		}
+		return tw.Flush()
 	}
-	return tw.Flush()
+	return cmd
 }
 
-// cmdReload asks a running proxy to re-read its configuration file.
-func cmdReload(args []string, stderr io.Writer) error {
-	fs := newFlagSet("reload", stderr)
+// newReloadCommand constructs a command that asks a running proxy to re-read its configuration file.
+func newReloadCommand(stdout, stderr io.Writer) *cobra.Command {
+	cmd := leafCommand("reload", "Reload the running proxy configuration")
+	fs := cmd.Flags()
 	configPath := fs.String("config", "", "deprecated compatibility flag; ignored")
 	socketFlag := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
-	if err := parseFlags(fs, args); err != nil {
-		return err
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		socket, err := resolveAdminSocket(*socketFlag, *configPath)
+		if err != nil {
+			return err
+		}
+		return admin.NewClient(socket).Reload()
 	}
-	socket, err := resolveAdminSocket(*socketFlag, *configPath)
-	if err != nil {
-		return err
-	}
-	return admin.NewClient(socket).Reload()
+	return cmd
 }
 
-// cmdUpstream manages the upstreams of a registry in a running proxy.
-func cmdUpstream(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		return fmt.Errorf("%w: want one of list, add, enable, disable, remove", errUsage)
-	}
-	action, rest := args[0], args[1:]
-	fs := newFlagSet("upstream "+action, stderr)
+// newUpstreamAction constructs an operation that manages the upstreams of a registry in a running proxy.
+func newUpstreamAction(action string) *cobra.Command {
+	cmd := leafCommand(action, upstreamDescriptions[action])
+	fs := cmd.Flags()
 	configPath := fs.String("config", "", "deprecated compatibility flag; ignored")
 	socketFlag := fs.String("admin-socket", "", "admin socket path (default: configuration or per-user location)")
 	registry := fs.String("registry", ociapi.DefaultAlias, "registry alias")
 
 	switch action {
 	case "list":
-		if err := parseFlags(fs, rest); err != nil {
-			return err
-		}
-		client, err := adminClient(*socketFlag, *configPath)
-		if err != nil {
-			return err
-		}
-		ups, err := client.ListUpstreams(*registry)
-		if err != nil {
-			return err
-		}
-		return printUpstreams(stdout, ups)
+		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+			client, err := adminClient(*socketFlag, *configPath)
+			if err != nil {
+				return err
+			}
+			ups, err := client.ListUpstreams(*registry)
+			if err != nil {
+				return err
+			}
+			return printUpstreams(cmd.OutOrStdout(), ups)
 
+		}
 	case "add":
 		id := fs.String("id", "", "optional legacy upstream label")
 		url := fs.String("url", "", "base URL of the Registry v2 endpoint")
@@ -95,70 +94,67 @@ func cmdUpstream(args []string, stdout, stderr io.Writer) error {
 		caFile := fs.String("ca-file", "", "extra CA certificate file for this upstream")
 		insecure := fs.Bool("insecure-skip-verify", false, "disable TLS verification for this upstream (not recommended)")
 		disabled := fs.Bool("disabled", false, "add the upstream but keep it out of rotation")
-		if err := parseFlags(fs, rest); err != nil {
-			return err
-		}
-		if *url == "" {
-			return fmt.Errorf("%w: --url is required", errUsage)
-		}
-		client, err := adminClient(*socketFlag, *configPath)
-		if err != nil {
-			return err
-		}
-		spec := admin.UpstreamSpec{
-			ID:        *id,
-			URL:       *url,
-			Disabled:  *disabled,
-			Connect:   *connect,
-			FirstByte: *firstByte,
-			Overall:   *overall,
-			Auth: admin.AuthSpec{
-				Type:     *authType,
-				Username: *username,
-				Password: *passwordRef,
-			},
-			TLS: admin.TLSSpec{CAFile: *caFile, InsecureSkipVerify: *insecure},
-		}
-		if err := client.AddUpstream(*registry, spec); err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "added upstream %s to %s\n", *url, *registry)
-		return nil
+		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+			if *url == "" {
+				return fmt.Errorf("%w: --url is required", errUsage)
+			}
+			client, err := adminClient(*socketFlag, *configPath)
+			if err != nil {
+				return err
+			}
+			spec := admin.UpstreamSpec{
+				ID:        *id,
+				URL:       *url,
+				Disabled:  *disabled,
+				Connect:   *connect,
+				FirstByte: *firstByte,
+				Overall:   *overall,
+				Auth: admin.AuthSpec{
+					Type:     *authType,
+					Username: *username,
+					Password: *passwordRef,
+				},
+				TLS: admin.TLSSpec{CAFile: *caFile, InsecureSkipVerify: *insecure},
+			}
+			if err := client.AddUpstream(*registry, spec); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "added upstream %s to %s\n", *url, *registry)
+			return nil
 
+		}
 	case "enable", "disable", "remove":
 		id := fs.String("id", "", "upstream identifier")
 		url := fs.String("url", "", "upstream URL (preferred over legacy --id)")
-		if err := parseFlags(fs, rest); err != nil {
-			return err
-		}
-		if *url != "" {
-			if *id != "" {
-				return fmt.Errorf("%w: --url and --id are mutually exclusive", errUsage)
+		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+			if *url != "" {
+				if *id != "" {
+					return fmt.Errorf("%w: --url and --id are mutually exclusive", errUsage)
+				}
+				*id = *url
 			}
-			*id = *url
-		}
-		if *id == "" {
-			return fmt.Errorf("%w: --url or legacy --id is required", errUsage)
-		}
-		client, err := adminClient(*socketFlag, *configPath)
-		if err != nil {
-			return err
-		}
-		switch action {
-		case "remove":
-			err = client.RemoveUpstream(*registry, *id)
-		default:
-			err = client.SetUpstreamDisabled(*registry, *id, action == "disable")
-		}
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "%s upstream %s in %s\n", pastTense(action), *id, *registry)
-		return nil
+			if *id == "" {
+				return fmt.Errorf("%w: --url or legacy --id is required", errUsage)
+			}
+			client, err := adminClient(*socketFlag, *configPath)
+			if err != nil {
+				return err
+			}
+			switch action {
+			case "remove":
+				err = client.RemoveUpstream(*registry, *id)
+			default:
+				err = client.SetUpstreamDisabled(*registry, *id, action == "disable")
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s upstream %s in %s\n", pastTense(action), *id, *registry)
+			return nil
 
-	default:
-		return fmt.Errorf("%w: unknown upstream action %q", errUsage, action)
+		}
 	}
+	return cmd
 }
 
 func adminClient(socketFlag, configPath string) (*admin.Client, error) {
