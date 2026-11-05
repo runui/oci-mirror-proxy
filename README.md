@@ -1,5 +1,7 @@
 # oci-mirror-proxy
 
+[![Homebrew: zmide/tap/oci-mirror-proxy (formula)](https://img.shields.io/endpoint?url=https%3A%2F%2Fbrew.zmorg.cn%2Fbadges%2Fformula%2Foci-mirror-proxy.json&label=Homebrew&style=flat&logo=homebrew)](https://brew.zmorg.cn/formula/oci-mirror-proxy/)
+
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 A local, read-only registry mirror proxy for dockerd. Manage upstreams at runtime,

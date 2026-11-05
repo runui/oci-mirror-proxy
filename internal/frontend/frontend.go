@@ -128,6 +128,28 @@ func writeFailure(w http.ResponseWriter, r *http.Request, kind ociapi.Kind, err 
 	}
 	ex, ok := errors.AsType[*scheduler.Exhausted](err)
 	if !ok || !ex.AllNotFound() {
+		// Preserve a unanimous, safe upstream status without exposing upstream
+		// bodies or authentication challenges. Mixed failures remain ambiguous.
+		if ok && len(ex.Failures) > 0 {
+			status := ex.Failures[0].Status
+			for _, failure := range ex.Failures {
+				if failure.Status != status || failure.Err != nil {
+					status = 0
+					break
+				}
+			}
+			switch status {
+			case http.StatusForbidden:
+				writeError(w, status, "DENIED", "upstream access denied")
+				return
+			case http.StatusTooManyRequests:
+				writeError(w, status, "TOOMANYREQUESTS", "upstream rate limit exceeded")
+				return
+			case http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+				writeError(w, status, "UNAVAILABLE", "no upstream could serve the request")
+				return
+			}
+		}
 		writeError(w, http.StatusBadGateway, "UNAVAILABLE", "no upstream could serve the request")
 		return
 	}
