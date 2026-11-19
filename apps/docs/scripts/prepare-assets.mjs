@@ -7,7 +7,7 @@ const publicDirectory = new URL('../public/', import.meta.url);
 
 export async function repositoryAssets(root = repositoryRoot) {
   const assets = ['install.sh', 'install.ps1'].map((path) => ({ path, source: new URL(path, root) }));
-  for (const name of ['direct-mirror.gif', 'oci-mirror-proxy.gif', 'direct-mirror.cast', 'oci-mirror-proxy.cast', 'direct-mirror.webp', 'oci-mirror-proxy.webp']) {
+  for (const name of ['direct-mirror.gif', 'oci-mirror-proxy.gif', 'direct-mirror.cast', 'oci-mirror-proxy.cast']) {
     assets.push({ path: `demos/${name}`, source: new URL(`docs/demos/${name}`, root) });
   }
   async function subscriptions(path) {
