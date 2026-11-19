@@ -27,5 +27,5 @@ export function homeUrl(locale: Locale) {
 }
 
 export function docsUrl(locale: Locale, slug = '') {
-	return `${locale === 'en' ? '' : `/${locale}`}/docs${slug ? `/${slug}` : ''}`;
+	return `${locale === 'en' ? '' : `/${locale}`}/docs/${slug ? `${slug.replace(/^\/+|\/+$/g, '')}/` : ''}`;
 }

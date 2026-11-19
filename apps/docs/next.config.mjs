@@ -9,7 +9,7 @@ const config = {
   trailingSlash: true,
   reactStrictMode: true,
   images: { unoptimized: true },
-  experimental: { globalNotFound: true },
+  experimental: { globalNotFound: true, inlineCss: true },
   turbopack: { root: fileURLToPath(new URL('.', import.meta.url)) },
 };
 

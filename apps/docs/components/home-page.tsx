@@ -91,8 +91,8 @@ export function HomePage({ locale }: { locale: Locale }) {
 							{text.recordings.map(({ title, alt, file }) => (
 								<figure key={file}>
 									<figcaption>{title}</figcaption>
-									<ImageZoom src={`/demos/${file}.gif`} alt={alt} caption={title}>
-										<Image src={`/demos/${file}.gif`} alt={alt} width={1104} height={726} unoptimized />
+									<ImageZoom src={`/demos/${file}.webp`} alt={alt} caption={title}>
+										<Image src={`/demos/${file}.webp`} alt={alt} width={1104} height={726} loading="lazy" decoding="async" fetchPriority="low" unoptimized />
 									</ImageZoom>
 								</figure>
 							))}

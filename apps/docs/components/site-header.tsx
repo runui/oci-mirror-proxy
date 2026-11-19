@@ -22,9 +22,9 @@ export function SiteLinks({ mobile = false }: { mobile?: boolean }) {
 	return navigationLinks(locale as Locale).map(({ text, url, external }) => {
 		const active = !external && !url.includes('#') && pathname.startsWith(url);
 		const link = (
-			<Link href={url} aria-current={active ? 'page' : undefined} target={external ? '_blank' : undefined} rel={external ? 'noreferrer' : undefined}>
+			<a href={url} aria-current={active ? 'page' : undefined} target={external ? '_blank' : undefined} rel={external ? 'noreferrer' : undefined}>
 				{text}
-			</Link>
+			</a>
 		);
 		return mobile ? <PopoverClose key={url} render={link} /> : <span key={url}>{link}</span>;
 	});

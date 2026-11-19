@@ -104,6 +104,15 @@ export async function checkExport(directory, { siteChecks = true } = {}) {
 			const expected = locales.find((locale) => from.startsWith(`/${locale}/`)) ?? 'en';
 			if (lang !== expected) errors.push(`${from}: expected html lang=${expected}, got ${lang}`);
 			if (!document.ids.has('main-content')) errors.push(`${from}: missing skip-link destination`);
+			if (document.ids.has('main-content')) {
+				if (document.elements.some(({ tag, attrs }) => tag === 'link' && attrs.rel === 'stylesheet')) errors.push(`${from}: render-blocking external stylesheet`);
+				for (const { tag, attrs } of document.elements) {
+					if (tag === 'img' && /\/demos\//.test(attrs.src ?? '') && (attrs.loading !== 'lazy' || attrs.fetchpriority !== 'low' || !attrs.width || !attrs.height)) errors.push(`${from}: demo image must be lazy, low priority, and sized`);
+				}
+				if (!document.elements.some(({ tag, text }) => tag === 'h1' && text.trim())) errors.push(`${from}: missing pre-rendered heading`);
+				if (!document.elements.some(({ tag, attrs, text }) => tag === 'a' && attrs.href?.includes('/docs') && text.trim())) errors.push(`${from}: missing pre-rendered documentation navigation`);
+				if (document.ids.has('install') && !document.elements.some(({ tag, text }) => tag === 'code' && text.includes('curl -fsSL'))) errors.push(`${from}: missing pre-rendered installation command`);
+			}
 		}
 	}
 	if (siteChecks) {

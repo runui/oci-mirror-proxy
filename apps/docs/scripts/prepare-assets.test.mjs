@@ -15,7 +15,7 @@ test('compacts subscription JSON while preserving source files and other asset b
     'install.sh', 'install.ps1',
     'subscriptions/mirrors.json', 'subscriptions/schema.json',
     'subscriptions/README.md', 'subscriptions/README.zh-CN.md', 'subscriptions/nested/catalog.json',
-    ...['direct-mirror.gif', 'oci-mirror-proxy.gif', 'direct-mirror.cast', 'oci-mirror-proxy.cast'].map((name) => `docs/demos/${name}`),
+    ...['direct-mirror.gif', 'oci-mirror-proxy.gif', 'direct-mirror.cast', 'oci-mirror-proxy.cast', 'direct-mirror.webp', 'oci-mirror-proxy.webp'].map((name) => `docs/demos/${name}`),
   ];
   const originals = new Map();
   for (const path of files) {

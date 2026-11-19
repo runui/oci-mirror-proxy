@@ -61,7 +61,7 @@
 		"previewText": "这次预览中，通过代理耗时 508.0 秒，直接使用镜像站耗时 740.3 秒。结果取决于网络环境和镜像源",
 		"previewLink": "查看对比与原始录制",
 		"previewMetric": "本次演示的速度对比",
-		"previewNote": "GIF 为加速预览 · 点击图片放大 · 按 × 或 Esc 关闭",
+    "previewNote": "动图为加速预览 · 点击图片放大 · 按 × 或 Esc 关闭",
 		"recordings": [
 			{ "title": "直连镜像站 · 740.3 秒", "alt": "直接通过镜像站拉取 Docker 镜像" },
 			{ "title": "通过 oci-mirror-proxy · 508.0 秒", "alt": "通过 oci-mirror-proxy 拉取 Docker 镜像" }

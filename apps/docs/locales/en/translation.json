@@ -61,7 +61,7 @@
 		"previewText": "508.0 s through the proxy, compared with 740.3 s directly from the mirror in this preview. Results depend on your network and mirrors.",
 		"previewLink": "See the comparison & recordings",
 		"previewMetric": "as fast in this preview",
-		"previewNote": "Time-compressed GIFs · Select an image to enlarge · Close with × or Esc",
+    "previewNote": "Time-compressed animations · Select an image to enlarge · Close with × or Esc",
 		"recordings": [
 			{ "title": "Direct mirror · 740.3 s", "alt": "Docker pull directly from the mirror" },
 			{ "title": "Through oci-mirror-proxy · 508.0 s", "alt": "Docker pull through oci-mirror-proxy" }
